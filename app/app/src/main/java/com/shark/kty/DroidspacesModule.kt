@@ -38,7 +38,7 @@ object DroidspacesModule {
         val body = conn.inputStream.bufferedReader().use { it.readText() }
         val json = JSONObject(body)
         val version = json.optString("tag_name").ifBlank { json.optString("name") }
-        if (version.isBlank()) throw IllegalStateException("release has no version")
+        if (version.isBlank()) throw IllegalStateException("Release has no version number")
 
         var zip: JSONObject? = null
         var shaAsset: JSONObject? = null
@@ -52,7 +52,7 @@ object DroidspacesModule {
             if (name.endsWith(".zip", ignoreCase = true)) zip = asset
             if (name.endsWith(".sha256", ignoreCase = true)) shaAsset = asset
         }
-        val apk = zip ?: throw IllegalStateException("no module zip in release")
+        val apk = zip ?: throw IllegalStateException("Release has no assets")
         val sha = shaAsset
             ?.let { runCatching { downloadText(it.optString("browser_download_url")) }.getOrNull() }
             ?.let(::extractSha256)
@@ -89,7 +89,7 @@ object DroidspacesModule {
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            ?: throw IllegalStateException("cannot create file in Download directory")
+            ?: throw IllegalStateException("Cannot create file in Download directory")
 
         try {
             val conn = (URL(release.assetUrl).openConnection() as HttpURLConnection).apply {
@@ -120,7 +120,7 @@ object DroidspacesModule {
                             }
                         }
                     }
-                } ?: throw IllegalStateException("cannot write Download file")
+                } ?: throw IllegalStateException("Cannot write to Download file")
             }
 
             val actual = digest.digest().joinToString("") { "%02x".format(it) }

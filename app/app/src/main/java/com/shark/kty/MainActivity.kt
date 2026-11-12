@@ -250,6 +250,10 @@ class MainActivity : ComponentActivity() {
     private var selinuxText by mutableStateOf("Unknown")
     private var antiRootGuard by mutableStateOf(true)
     private var softRebootAfter by mutableStateOf(false)
+    private var secondSoftReboot by mutableStateOf(false)
+    private var softRebootDelayMin by mutableStateOf(0)
+    private var softRebootJob: Job? = null
+    private val softRebootDelays = listOf(0, 1, 2, 3)
     private var unloadGuard by mutableStateOf(true)
     private var susfsSupport by mutableStateOf(false)
     private var vfsSupport by mutableStateOf(false)
@@ -419,6 +423,11 @@ class MainActivity : ComponentActivity() {
         )
         window.isNavigationBarContrastEnforced = false
         super.onCreate(savedInstanceState)
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                ProcessBuilder("su", "-c", "rm -f /data/adb/shark_boot_flag").start().waitFor()
+            }
+        }
         Shizuku.addRequestPermissionResultListener(permissionListener)
         Shizuku.addBinderReceivedListenerSticky(binderListener)
         Stellar.addRequestPermissionResultListener(stellarPermissionListener)
@@ -427,6 +436,10 @@ class MainActivity : ComponentActivity() {
         refreshAuth()
         antiRootGuard = getSharedPreferences("pyb110", MODE_PRIVATE).getBoolean("antiroot_guard", true)
         softRebootAfter = getSharedPreferences("pyb110", MODE_PRIVATE).getBoolean("soft_reboot_after", false)
+        secondSoftReboot = getSharedPreferences("pyb110", MODE_PRIVATE)
+            .getBoolean("second_soft_reboot", false)
+        softRebootDelayMin = getSharedPreferences("pyb110", MODE_PRIVATE)
+            .getInt("soft_reboot_delay_min", 0)
         unloadGuard = getSharedPreferences("pyb110", MODE_PRIVATE).getBoolean("unload_guard", true)
         susfsSupport = getSharedPreferences("pyb110", MODE_PRIVATE).getBoolean("susfs_support", false)
         vfsSupport = getSharedPreferences("pyb110", MODE_PRIVATE).getBoolean("vfs_support", false)
@@ -1446,6 +1459,24 @@ class MainActivity : ComponentActivity() {
                             checked = softRebootAfter,
                             onCheckedChange = { updateSoftRebootAfter(it) }
                         )
+                        if (softRebootAfter) {
+                            Divider(startIndent = itemDividerIndent(), color = colors.divider)
+                            SettingSwitchItem(
+                                icon = Icons.Filled.RestartAlt,
+                                title = "Second soft reboot (for Zygisk/modules)",
+                                checked = secondSoftReboot,
+                                onCheckedChange = { updateSecondSoftReboot(it) }
+                            )
+                            Divider(startIndent = itemDividerIndent(), color = colors.divider)
+                            DropdownItem(
+                                icon = Icons.Filled.Schedule,
+                                title = "Soft reboot delay",
+                                values = softRebootDelays,
+                                selected = softRebootDelayMin,
+                                label = { softRebootDelayLabel(it) },
+                                onSelect = { updateSoftRebootDelay(it) }
+                            )
+                        }
                         Divider(startIndent = itemDividerIndent(), color = colors.divider)
                         SettingSwitchItem(
                             icon = Icons.Filled.RemoveModerator,
@@ -2208,7 +2239,7 @@ class MainActivity : ComponentActivity() {
 
     private fun readDeviceState(): Pair<Boolean, String> {
         val p = PrivService.newProcess(
-            arrayOf("sh", "-c", "if grep -qi kernelsu /proc/modules; then echo YES; elif timeout 3 su -c id 2>/dev/null | grep -q uid=0; then echo YES; else echo NO; fi; getenforce"),
+            arrayOf("sh", "-c", "if grep -q '^kernelsu .* Live ' /proc/modules; then echo YES; elif timeout 3 su -c id 2>/dev/null | grep -q uid=0; then echo YES; else echo NO; fi; getenforce"),
             shizukuEnv(), "/"
         )
         val lines = p.getInputStream()
@@ -2228,7 +2259,35 @@ class MainActivity : ComponentActivity() {
     private fun updateSoftRebootAfter(value: Boolean) {
         softRebootAfter = value
         getSharedPreferences("pyb110", MODE_PRIVATE).edit().putBoolean("soft_reboot_after", value).apply()
+        if (!value) {
+            softRebootJob?.cancel()
+            softRebootJob = null
+        }
         addLog("Soft reboot after jailbreak: ${if (value) "on" else "off"}")
+    }
+
+    private fun updateSecondSoftReboot(value: Boolean) {
+        secondSoftReboot = value
+        getSharedPreferences("pyb110", MODE_PRIVATE).edit()
+            .putBoolean("second_soft_reboot", value)
+            .apply()
+        addLog("Second soft reboot: ${if (value) "on" else "off"}")
+    }
+
+    private fun updateSoftRebootDelay(minutes: Int) {
+        softRebootDelayMin = minutes
+        getSharedPreferences("pyb110", MODE_PRIVATE).edit()
+            .putInt("soft_reboot_delay_min", minutes)
+            .apply()
+        addLog("Soft reboot time: ${softRebootDelayLabel(minutes)}")
+    }
+
+    private fun softRebootDelayLabel(minutes: Int): String = when (minutes) {
+        0 -> "Immediately"
+        1 -> "In 1 min"
+        2 -> "In 2 mins"
+        3 -> "In 3 mins"
+        else -> "In $minutes mins"
     }
 
     private fun updateUnloadGuard(value: Boolean) {
@@ -2446,6 +2505,12 @@ class MainActivity : ComponentActivity() {
     private fun maybeSecondSoftReboot() {
         val prefs = getSharedPreferences("pyb110", MODE_PRIVATE)
         if (!prefs.getBoolean("pending_zygisk_reboot", false)) return
+        if (prefs.contains("second_soft_reboot") &&
+            !prefs.getBoolean("second_soft_reboot", false)
+        ) {
+            prefs.edit().remove("pending_zygisk_reboot").apply()
+            return
+        }
         lifecycleScope.launch(Dispatchers.IO) {
             // Same module toggle + soft reboot, once the app is back after the first one
             repeat(10) { attempt ->
@@ -2566,17 +2631,51 @@ class MainActivity : ComponentActivity() {
                     selinuxText = se
                 }
                 addLog(if (active) "KernelSU module loaded" else "KernelSU module not loaded")
+                if (success) {
+                    val rescueScript = """
+                        #!/system/bin/sh
+                        if [ -f /data/adb/shark_boot_flag ]; then
+                            for dir in /data/adb/modules/* /data/adb/ksu/modules/* /data/adb/ap/modules/*; do
+                                if [ -d "${'$'}dir" ]; then
+                                    touch "${'$'}dir/disable"
+                                fi
+                            done
+                            rm -f /data/adb/shark_boot_flag
+                        fi
+                    """.trimIndent()
+                    PrivService.newProcess(
+                        arrayOf(
+                            "su", "-c",
+                            "echo '$rescueScript' > /data/adb/post-fs-data.d/shark_rescue.sh && chmod 755 /data/adb/post-fs-data.d/shark_rescue.sh"
+                        ),
+                        shizukuEnv(), "/"
+                    ).waitFor()
+                }
                 if (active && !softReboot) {
                     withContext(Dispatchers.Main) { launchManager() }
                 }
                 if (softReboot && rc == 0 && active) {
+                    val delayMin = softRebootDelayMin
                     addLog("Jailbreak complete; module toggle + soft reboot 1/2")
                     getSharedPreferences("pyb110", MODE_PRIVATE)
-                        .edit().putBoolean("pending_zygisk_reboot", true).commit()
+                        .edit()
+                        .putBoolean("pending_zygisk_reboot", secondSoftReboot)
+                        .apply()
                     toggleModulesForZygisk()
-                    val firstRc = doSoftReboot()
-                    if (firstRc != 0) addLog("First soft reboot failed rc=$firstRc")
-                    else addLog("First soft reboot initiated")
+                    softRebootJob?.cancel()
+                    softRebootJob = lifecycleScope.launch(Dispatchers.IO) {
+                        if (delayMin > 0) {
+                            addLog("Jailbreak complete; restarting zygote in ${softRebootDelayLabel(delayMin)}")
+                            delay(delayMin * 60_000L)
+                        }
+                        PrivService.newProcess(
+                            arrayOf("su", "-c", "touch /data/adb/shark_boot_flag"),
+                            shizukuEnv(), "/"
+                        ).waitFor()
+                        val firstRc = doSoftReboot()
+                        if (firstRc != 0) addLog("First soft reboot failed rc=$firstRc")
+                        else addLog("First soft reboot initiated")
+                    }
                     // Circuit breaker waits until after the second soft reboot
                 } else if (rc == 0 && active) {
                     // Mark a clean successful boot so the circuit breaker stays quiet next time
@@ -2715,6 +2814,7 @@ class MainActivity : ComponentActivity() {
             "6.6.118-android15-8-g9bc34d5b0c79-abogki537459655-4k" to ExploitKind.CVE66118,
             "6.6.118-android15-8-gc4127a25dcf3-ab15863337-4k" to ExploitKind.CVE66118,
             "6.6.127-android15-8-gd489d4ad2a70-abogki567717946-4k" to ExploitKind.CVE66127,
+            "6.12.58-android16-6-g690108013dcc-abogki576129896-4k" to ExploitKind.CVE61258,
         )
     }
 }
