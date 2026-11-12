@@ -1102,6 +1102,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier
                         .align(Alignment.CenterHorizontally)
                         .clickable { uriHandler.openUri(paypalUrl) },
+                    kind = CouiTextKind.PreferenceSummary,
                     color = accent
                 )
             }
