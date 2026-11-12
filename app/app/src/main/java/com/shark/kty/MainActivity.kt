@@ -2414,22 +2414,30 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences("pyb110", MODE_PRIVATE)
         if (!prefs.getBoolean("pending_zygisk_reboot", false)) return
         lifecycleScope.launch(Dispatchers.IO) {
-            kotlinx.coroutines.delay(4000)
-            val (active, _) = readDeviceState()
-            if (!active) return@launch
-            addLog("Pending Zygisk soft reboot; restarting zygote once more")
-            val rc = runCatching {
-                PrivService.newProcess(
-                    arrayOf("su", "-c", "setprop ctl.restart zygote"),
-                    shizukuEnv(), "/"
-                ).waitFor()
-            }.getOrDefault(-1)
-            if (rc == 0) {
-                prefs.edit().putBoolean("pending_zygisk_reboot", false).apply()
-                addLog("Second soft reboot initiated")
-            } else {
-                addLog("Second soft reboot failed rc=$rc")
+            // Wait for root to come back after the first soft reboot, then do the second once
+            var done = false
+            repeat(6) { attempt ->
+                kotlinx.coroutines.delay(if (attempt == 0) 8000 else 5000)
+                if (!prefs.getBoolean("pending_zygisk_reboot", false)) return@launch
+                val (active, _) = readDeviceState()
+                if (!active) return@repeat
+                addLog("Pending Zygisk soft reboot; restarting zygote once more")
+                val rc = runCatching {
+                    PrivService.newProcess(
+                        arrayOf("su", "-c", "setprop ctl.restart zygote"),
+                        shizukuEnv(), "/"
+                    ).waitFor()
+                }.getOrDefault(-1)
+                if (rc == 0) {
+                    prefs.edit().putBoolean("pending_zygisk_reboot", false).apply()
+                    addLog("Second soft reboot initiated")
+                    done = true
+                    return@launch
+                } else {
+                    addLog("Second soft reboot failed rc=$rc (attempt ${attempt + 1})")
+                }
             }
+            if (!done) addLog("Second soft reboot still pending; reopen the app to retry")
         }
     }
 
@@ -2533,26 +2541,29 @@ class MainActivity : ComponentActivity() {
                     withContext(Dispatchers.Main) { launchManager() }
                 }
                 if (softReboot && rc == 0 && active) {
-                    addLog("Jailbreak complete; soft rebooting twice so Zygisk can enable")
-                    // Flag survives if zygote restart kills this process before the second reboot
+                    addLog("Jailbreak complete; soft reboot 1/2 (Zygisk needs a second)")
+                    // Keep the flag until the second reboot actually runs
                     getSharedPreferences("pyb110", MODE_PRIVATE)
                         .edit().putBoolean("pending_zygisk_reboot", true).apply()
-                    val rebootRc = runCatching {
+                    // Detached second reboot: new session so the first zygote restart does not kill it
+                    val scheduleRc = runCatching {
                         PrivService.newProcess(
                             arrayOf(
                                 "su", "-c",
-                                "setprop ctl.restart zygote; sleep 8; setprop ctl.restart zygote"
+                                "setsid sh -c 'sleep 20; setprop ctl.restart zygote' >/dev/null 2>&1 &"
                             ),
                             shizukuEnv(), "/"
                         ).waitFor()
                     }.getOrDefault(-1)
-                    if (rebootRc == 0) {
-                        getSharedPreferences("pyb110", MODE_PRIVATE)
-                            .edit().putBoolean("pending_zygisk_reboot", false).apply()
-                        addLog("Two soft reboots initiated")
-                    } else {
-                        addLog("Soft reboot sequence failed rc=$rebootRc; second reboot will retry on next launch")
-                    }
+                    addLog(if (scheduleRc == 0) "Second soft reboot scheduled in 20s" else "Second soft reboot schedule failed rc=$scheduleRc; will retry on next launch")
+                    val firstRc = runCatching {
+                        PrivService.newProcess(
+                            arrayOf("su", "-c", "setprop ctl.restart zygote"),
+                            shizukuEnv(), "/"
+                        ).waitFor()
+                    }.getOrDefault(-1)
+                    if (firstRc != 0) addLog("First soft reboot failed rc=$firstRc")
+                    else addLog("First soft reboot initiated")
                     // Selective circuit breaker only runs after an intentional soft reboot
                     circuitBreakerDisableRecentModules()
                 } else if (rc == 0 && active) {
