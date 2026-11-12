@@ -175,7 +175,7 @@ object UpdateChecker {
         val expected = info.sha256
         if (!expected.isNullOrBlank() && !actual.equals(expected, ignoreCase = true)) {
             target.delete()
-            throw IllegalStateException("SHA-256 校验失败")
+            throw IllegalStateException("SHA-256 verification failed")
         }
         target
     }

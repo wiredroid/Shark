@@ -38,12 +38,12 @@ object DroidspacesModule {
         val body = conn.inputStream.bufferedReader().use { it.readText() }
         val json = JSONObject(body)
         val version = json.optString("tag_name").ifBlank { json.optString("name") }
-        if (version.isBlank()) throw IllegalStateException("release 没有版本号")
+        if (version.isBlank()) throw IllegalStateException("Release has no version")
 
         var zip: JSONObject? = null
         var shaAsset: JSONObject? = null
         val assets = json.optJSONArray("assets")
-            ?: throw IllegalStateException("release 没有附件")
+            ?: throw IllegalStateException("Release has no assets")
         for (i in 0 until assets.length()) {
             val asset = assets.optJSONObject(i) ?: continue
             val name = asset.optString("name")
@@ -52,7 +52,7 @@ object DroidspacesModule {
             if (name.endsWith(".zip", ignoreCase = true)) zip = asset
             if (name.endsWith(".sha256", ignoreCase = true)) shaAsset = asset
         }
-        val apk = zip ?: throw IllegalStateException("release 中没有模块 zip")
+        val apk = zip ?: throw IllegalStateException("Release has no module zip")
         val sha = shaAsset
             ?.let { runCatching { downloadText(it.optString("browser_download_url")) }.getOrNull() }
             ?.let(::extractSha256)
@@ -89,7 +89,7 @@ object DroidspacesModule {
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            ?: throw IllegalStateException("无法在 Download 目录创建文件")
+            ?: throw IllegalStateException("Unable to create the file in Downloads")
 
         try {
             val conn = (URL(release.assetUrl).openConnection() as HttpURLConnection).apply {
@@ -120,14 +120,14 @@ object DroidspacesModule {
                             }
                         }
                     }
-                } ?: throw IllegalStateException("无法写入 Download 文件")
+                } ?: throw IllegalStateException("Unable to write the Downloads file")
             }
 
             val actual = digest.digest().joinToString("") { "%02x".format(it) }
             if (!release.sha256.isNullOrBlank() &&
                 !actual.equals(release.sha256, ignoreCase = true)
             ) {
-                throw IllegalStateException("SHA-256 校验失败")
+                throw IllegalStateException("SHA-256 verification failed")
             }
 
             val doneValues = ContentValues().apply {
