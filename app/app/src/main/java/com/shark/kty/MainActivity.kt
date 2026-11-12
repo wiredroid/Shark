@@ -443,6 +443,14 @@ class MainActivity : ComponentActivity() {
             .getBoolean("second_soft_reboot", false)
         softRebootDelayMin = getSharedPreferences("pyb110", MODE_PRIVATE)
             .getInt("soft_reboot_delay_min", 0)
+        if (!getSharedPreferences("pyb110", MODE_PRIVATE)
+                .getBoolean("pending_zygisk_reboot", false)
+        ) {
+            getSharedPreferences("pyb110", MODE_PRIVATE)
+                .edit()
+                .remove("second_reboot_scheduled")
+                .apply()
+        }
         unloadGuard = getSharedPreferences("pyb110", MODE_PRIVATE).getBoolean("unload_guard", true)
         susfsSupport = getSharedPreferences("pyb110", MODE_PRIVATE).getBoolean("susfs_support", false)
         vfsSupport = getSharedPreferences("pyb110", MODE_PRIVATE).getBoolean("vfs_support", false)
@@ -2505,9 +2513,29 @@ class MainActivity : ComponentActivity() {
         if (rc != 0) addLog("Module toggle warning rc=$rc")
     }
 
+    private fun scheduleSecondSoftReboot(): Int = runCatching {
+        val script = """
+            (
+                sleep 12
+                MODDIR=/data/adb/modules
+                if [ -d "${'$'}MODDIR" ]; then
+                    find "${'$'}MODDIR" -mindepth 2 -maxdepth 2 -name disable -delete 2>/dev/null
+                    newest=${'$'}(ls -1td "${'$'}MODDIR"/*/ 2>/dev/null | head -n 1)
+                    if [ -n "${'$'}newest" ] && [ -d "${'$'}newest" ]; then
+                        touch "${'$'}newest/disable"
+                        rm -f "${'$'}newest/disable"
+                    fi
+                fi
+                setprop ctl.restart zygote
+            ) >/dev/null 2>&1 &
+        """.trimIndent()
+        PrivService.newProcess(arrayOf("su", "-c", script), shizukuEnv(), "/").waitFor()
+    }.getOrDefault(-1)
+
     private fun maybeSecondSoftReboot() {
         val prefs = getSharedPreferences("pyb110", MODE_PRIVATE)
         if (!prefs.getBoolean("pending_zygisk_reboot", false)) return
+        if (prefs.getBoolean("second_reboot_scheduled", false)) return
         if (prefs.contains("second_soft_reboot") &&
             !prefs.getBoolean("second_soft_reboot", false)
         ) {
@@ -2677,7 +2705,22 @@ class MainActivity : ComponentActivity() {
                         ).waitFor()
                         val firstRc = doSoftReboot()
                         if (firstRc != 0) addLog("First soft reboot failed rc=$firstRc")
-                        else addLog("First soft reboot initiated")
+                        else {
+                            addLog("First soft reboot initiated")
+                            if (secondSoftReboot) {
+                                val scheduleRc = scheduleSecondSoftReboot()
+                                if (scheduleRc == 0) {
+                                    getSharedPreferences("pyb110", MODE_PRIVATE)
+                                        .edit()
+                                        .putBoolean("pending_zygisk_reboot", false)
+                                        .putBoolean("second_reboot_scheduled", true)
+                                        .apply()
+                                    addLog("Second soft reboot scheduled in 12 seconds")
+                                } else {
+                                    addLog("Second soft reboot scheduling failed rc=$scheduleRc")
+                                }
+                            }
+                        }
                     }
                     // Circuit breaker waits until after the second soft reboot
                 } else if (rc == 0 && active) {
