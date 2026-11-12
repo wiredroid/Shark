@@ -2679,33 +2679,31 @@ class MainActivity : ComponentActivity() {
                     toggleModulesForZygisk()
                     softRebootJob?.cancel()
                     softRebootJob = lifecycleScope.launch(Dispatchers.IO) {
+                        if (secondSoftReboot) {
+                            val scheduleRc = scheduleSecondSoftReboot(delayMin)
+                            if (scheduleRc == 0) {
+                                getSharedPreferences("pyb110", MODE_PRIVATE)
+                                    .edit()
+                                    .putBoolean("pending_zygisk_reboot", false)
+                                    .putBoolean("second_reboot_scheduled", true)
+                                    .apply()
+                                val secondDelay = if (delayMin > 0) {
+                                    softRebootDelayLabel(delayMin)
+                                } else {
+                                    "12 seconds"
+                                }
+                                addLog("Second soft reboot scheduled $secondDelay")
+                            } else {
+                                addLog("Second soft reboot scheduling failed rc=$scheduleRc")
+                            }
+                        }
                         PrivService.newProcess(
                             arrayOf("su", "-c", "touch /data/adb/shark_boot_flag"),
                             shizukuEnv(), "/"
                         ).waitFor()
                         val firstRc = doSoftReboot()
                         if (firstRc != 0) addLog("First soft reboot failed rc=$firstRc")
-                        else {
-                            addLog("First soft reboot initiated")
-                            if (secondSoftReboot) {
-                                val scheduleRc = scheduleSecondSoftReboot(delayMin)
-                                if (scheduleRc == 0) {
-                                    getSharedPreferences("pyb110", MODE_PRIVATE)
-                                        .edit()
-                                        .putBoolean("pending_zygisk_reboot", false)
-                                        .putBoolean("second_reboot_scheduled", true)
-                                        .apply()
-                                    val secondDelay = if (delayMin > 0) {
-                                        softRebootDelayLabel(delayMin)
-                                    } else {
-                                        "12 seconds"
-                                    }
-                                    addLog("Second soft reboot scheduled $secondDelay")
-                                } else {
-                                    addLog("Second soft reboot scheduling failed rc=$scheduleRc")
-                                }
-                            }
-                        }
+                        else addLog("First soft reboot initiated")
                     }
                     // Circuit breaker waits until after the second soft reboot
                 } else if (rc == 0 && active) {
