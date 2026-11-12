@@ -2418,21 +2418,49 @@ class MainActivity : ComponentActivity() {
         ).waitFor()
     }.getOrDefault(-1)
 
+    /** Enable modules, then briefly toggle the newest one so Zygisk re-evaluates. Does not delete anything. */
+    private fun toggleModulesForZygisk() {
+        val script = """
+            MODDIR=/data/adb/modules
+            if [ ! -d "${'$'}MODDIR" ]; then
+                echo "No modules directory"
+                exit 0
+            fi
+            # Ensure modules are enabled
+            find "${'$'}MODDIR" -mindepth 2 -maxdepth 2 -name disable -delete 2>/dev/null
+            # Toggle the newest module (disable then re-enable) to force a Zygisk refresh
+            newest=$(ls -1td "${'$'}MODDIR"/*/ 2>/dev/null | head -n 1)
+            if [ -n "${'$'}newest" ] && [ -d "${'$'}newest" ]; then
+                touch "${'$'}newest/disable"
+                rm -f "${'$'}newest/disable"
+                echo "Toggled module: $(basename "${'$'}newest")"
+            else
+                echo "No module to toggle"
+            fi
+        """.trimIndent()
+        val (rc, out) = runRootCommand(script, 10)
+        out.lines().filter { it.isNotBlank() }.forEach { addLog("MOD: $it") }
+        if (rc != 0) addLog("Module toggle warning rc=$rc")
+    }
+
     private fun maybeSecondSoftReboot() {
         val prefs = getSharedPreferences("pyb110", MODE_PRIVATE)
         if (!prefs.getBoolean("pending_zygisk_reboot", false)) return
         lifecycleScope.launch(Dispatchers.IO) {
-            // Same path as the first soft reboot, once the app is back and root is up
+            // Same module toggle + soft reboot, once the app is back after the first one
             repeat(10) { attempt ->
                 kotlinx.coroutines.delay(if (attempt == 0) 2000 else 3000)
                 if (!prefs.getBoolean("pending_zygisk_reboot", false)) return@launch
                 val (active, _) = readDeviceState()
                 if (!active) return@repeat
-                addLog("App doing second soft reboot for Zygisk")
+                addLog("Second pass: module toggle + soft reboot for Zygisk")
+                toggleModulesForZygisk()
                 val rc = doSoftReboot()
                 if (rc == 0) {
                     prefs.edit().putBoolean("pending_zygisk_reboot", false).commit()
                     addLog("Second soft reboot initiated")
+                    // Circuit breaker only after modules have had a chance to activate
+                    circuitBreakerDisableRecentModules()
                     return@launch
                 } else {
                     addLog("Second soft reboot failed rc=$rc (attempt ${attempt + 1})")
@@ -2541,15 +2569,14 @@ class MainActivity : ComponentActivity() {
                     withContext(Dispatchers.Main) { launchManager() }
                 }
                 if (softReboot && rc == 0 && active) {
-                    addLog("Jailbreak complete; soft reboot 1/2 (app will do the second for Zygisk)")
-                    // Persist before the first restart so the app can do the second itself
+                    addLog("Jailbreak complete; module toggle + soft reboot 1/2")
                     getSharedPreferences("pyb110", MODE_PRIVATE)
                         .edit().putBoolean("pending_zygisk_reboot", true).commit()
+                    toggleModulesForZygisk()
                     val firstRc = doSoftReboot()
                     if (firstRc != 0) addLog("First soft reboot failed rc=$firstRc")
                     else addLog("First soft reboot initiated")
-                    // Selective circuit breaker only runs after an intentional soft reboot
-                    circuitBreakerDisableRecentModules()
+                    // Circuit breaker waits until after the second soft reboot
                 } else if (rc == 0 && active) {
                     // Mark a clean successful boot so the circuit breaker stays quiet next time
                     runRootCommand("touch /data/adb/.shark_boot_ok", 5)
