@@ -1074,6 +1074,8 @@ class MainActivity : ComponentActivity() {
     private fun DonateDialog() {
         if (!showDonate) return
         val accent = CouiTheme.colorScheme.accent
+        val uriHandler = LocalUriHandler.current
+        val paypalUrl = "https://www.paypal.com/pools/c/9ukypdlZXf"
         Dialog(
             onDismissRequest = { showDonate = false },
             title = "Support Developer",
@@ -1090,21 +1092,18 @@ class MainActivity : ComponentActivity() {
                     .fillMaxWidth()
                     .padding(horizontal = CouiDialogDefaults.contentPadding)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    DonateQr(
-                        label = "WeChat Donate",
-                        assetPath = "donate/wechat.png",
-                        modifier = Modifier.weight(1f)
-                    )
-                    DonateQr(
-                        label = "Alipay",
-                        assetPath = "donate/alipay.png",
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                DonateQr(
+                    label = "PayPal Donate",
+                    assetPath = "donate/paypal.png"
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Open PayPal donation page",
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .clickable { uriHandler.openUri(paypalUrl) },
+                    color = accent
+                )
             }
         }
     }
@@ -2074,7 +2073,7 @@ class MainActivity : ComponentActivity() {
                     SettingItem(
                         icon = Icons.Filled.Favorite,
                         title = "Support Developer",
-                        summary = "WeChat / Alipay donation QR codes",
+                        summary = "PayPal donation QR code and link",
                         onClick = { showDonate = true },
                         trailing = { Chevron() }
                     )
