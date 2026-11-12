@@ -1481,7 +1481,7 @@ class MainActivity : ComponentActivity() {
                             Divider(startIndent = itemDividerIndent(), color = colors.divider)
                             DropdownItem(
                                 icon = Icons.Filled.Schedule,
-                                title = "Soft reboot delay",
+                                title = "Second soft reboot delay",
                                 values = softRebootDelays,
                                 selected = softRebootDelayMin,
                                 label = { softRebootDelayLabel(it) },
@@ -2696,10 +2696,6 @@ class MainActivity : ComponentActivity() {
                     toggleModulesForZygisk()
                     softRebootJob?.cancel()
                     softRebootJob = lifecycleScope.launch(Dispatchers.IO) {
-                        if (delayMin > 0) {
-                            addLog("Jailbreak complete; restarting zygote in ${softRebootDelayLabel(delayMin)}")
-                            delay(delayMin * 60_000L)
-                        }
                         PrivService.newProcess(
                             arrayOf("su", "-c", "touch /data/adb/shark_boot_flag"),
                             shizukuEnv(), "/"
