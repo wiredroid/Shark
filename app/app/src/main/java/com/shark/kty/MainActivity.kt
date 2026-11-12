@@ -2410,15 +2410,30 @@ class MainActivity : ComponentActivity() {
     }
 
 
-    private fun maybeSecondSoftReboot() {
+    private fun zygiskRebootPending(): Boolean {
         val prefs = getSharedPreferences("pyb110", MODE_PRIVATE)
-        if (!prefs.getBoolean("pending_zygisk_reboot", false)) return
+        val (rc, out) = runRootCommand("test -f /data/adb/.shark_zygisk_reboot && echo yes", 5)
+        if (rc == 0 && out.contains("yes")) return true
+        if (rc == 0) {
+            // Marker gone: detached script already did the second reboot, or nothing pending
+            prefs.edit().putBoolean("pending_zygisk_reboot", false).commit()
+            return false
+        }
+        return prefs.getBoolean("pending_zygisk_reboot", false)
+    }
+
+    private fun clearZygiskRebootPending() {
+        getSharedPreferences("pyb110", MODE_PRIVATE)
+            .edit().putBoolean("pending_zygisk_reboot", false).commit()
+        runRootCommand("rm -f /data/adb/.shark_zygisk_reboot /data/adb/.shark_reboot2.sh", 5)
+    }
+
+    private fun maybeSecondSoftReboot() {
         lifecycleScope.launch(Dispatchers.IO) {
-            // Wait for root to come back after the first soft reboot, then do the second once
-            var done = false
-            repeat(6) { attempt ->
-                kotlinx.coroutines.delay(if (attempt == 0) 8000 else 5000)
-                if (!prefs.getBoolean("pending_zygisk_reboot", false)) return@launch
+            // After a soft reboot the app may restart; keep trying until root is back
+            repeat(8) { attempt ->
+                kotlinx.coroutines.delay(if (attempt == 0) 35000 else 5000)
+                if (!zygiskRebootPending()) return@launch
                 val (active, _) = readDeviceState()
                 if (!active) return@repeat
                 addLog("Pending Zygisk soft reboot; restarting zygote once more")
@@ -2429,15 +2444,13 @@ class MainActivity : ComponentActivity() {
                     ).waitFor()
                 }.getOrDefault(-1)
                 if (rc == 0) {
-                    prefs.edit().putBoolean("pending_zygisk_reboot", false).apply()
+                    clearZygiskRebootPending()
                     addLog("Second soft reboot initiated")
-                    done = true
                     return@launch
                 } else {
                     addLog("Second soft reboot failed rc=$rc (attempt ${attempt + 1})")
                 }
             }
-            if (!done) addLog("Second soft reboot still pending; reopen the app to retry")
         }
     }
 
@@ -2542,20 +2555,14 @@ class MainActivity : ComponentActivity() {
                 }
                 if (softReboot && rc == 0 && active) {
                     addLog("Jailbreak complete; soft reboot 1/2 (Zygisk needs a second)")
-                    // Keep the flag until the second reboot actually runs
+                    // commit() so the flag is on disk before zygote dies. Also drop a root marker.
                     getSharedPreferences("pyb110", MODE_PRIVATE)
-                        .edit().putBoolean("pending_zygisk_reboot", true).apply()
-                    // Detached second reboot: new session so the first zygote restart does not kill it
-                    val scheduleRc = runCatching {
-                        PrivService.newProcess(
-                            arrayOf(
-                                "su", "-c",
-                                "setsid sh -c 'sleep 20; setprop ctl.restart zygote' >/dev/null 2>&1 &"
-                            ),
-                            shizukuEnv(), "/"
-                        ).waitFor()
-                    }.getOrDefault(-1)
-                    addLog(if (scheduleRc == 0) "Second soft reboot scheduled in 20s" else "Second soft reboot schedule failed rc=$scheduleRc; will retry on next launch")
+                        .edit().putBoolean("pending_zygisk_reboot", true).commit()
+                    runRootCommand("touch /data/adb/.shark_zygisk_reboot", 5)
+                    // Write a detached script and launch it so it can survive the first restart
+                    val scheduleScript = "printf '%s\n' '#!/system/bin/sh' 'sleep 25' 'rm -f /data/adb/.shark_zygisk_reboot' 'setprop ctl.restart zygote' > /data/adb/.shark_reboot2.sh && chmod 755 /data/adb/.shark_reboot2.sh && nohup /data/adb/.shark_reboot2.sh >/data/adb/.shark_reboot2.log 2>&1 & echo ok"
+                    val (scheduleRc, scheduleOut) = runRootCommand(scheduleScript, 10)
+                    addLog(if (scheduleRc == 0) "Second soft reboot scheduled in 25s" else "Second soft reboot schedule failed rc=$scheduleRc $scheduleOut")
                     val firstRc = runCatching {
                         PrivService.newProcess(
                             arrayOf("su", "-c", "setprop ctl.restart zygote"),
