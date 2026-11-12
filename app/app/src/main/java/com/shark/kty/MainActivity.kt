@@ -2544,6 +2544,7 @@ class MainActivity : ComponentActivity() {
                     ExploitKind.CVE61258 -> arrayOf("$nativeDir/libk61258.so", "run")
                     ExploitKind.CVE61223 -> arrayOf("$nativeDir/libk61223.so", "run")
                     ExploitKind.CVE66118 -> arrayOf("$nativeDir/libk66118.so", "run")
+                    ExploitKind.CVE66127 -> arrayOf("$nativeDir/libk66127.so", "run")
                     ExploitKind.UNSUPPORTED -> null
                 } ?: run {
                     withContext(Dispatchers.Main) {
@@ -2602,6 +2603,7 @@ class MainActivity : ComponentActivity() {
         val env = shizukuEnv() + "PYB110_DIR=$dir" + "PYB110_MANAGER=${initialManager.manager}" +
             "PYB110_LATE_LOAD=1" +
             "PYB110_UNLOAD_GUARD=${if (unloadGuard) "1" else "0"}" +
+            "PYB110_GATE=${if (isGateKernel()) "1" else "0"}" +
             "PYB110_DISABLE_ANTIROOT=${if (antiRootGuard) "1" else "0"}" +
             "PYB110_SUSFS=${if (susfsActive) "1" else "0"}" +
             "PYB110_VFS=${if (vfsSupport) "1" else "0"}" +
@@ -2657,6 +2659,7 @@ class MainActivity : ComponentActivity() {
         CVE61258("CVE-2026-98260-6.12.58"),
         CVE61223("CVE-2026-98260-vivo-6.12.23"),
         CVE66118("CVE-2026-98260-6.6.118"),
+        CVE66127("CVE-2026-98260-vivo-6.6.127"),
         UNSUPPORTED("Device not supported")
     }
 
@@ -2673,6 +2676,12 @@ class MainActivity : ComponentActivity() {
         (exploit == ExploitKind.CVE61223 || exploit == ExploitKind.CVE61258) &&
             kernelVersion.contains("abogki")
 
+    private fun isGateKernel(): Boolean =
+        exploit == ExploitKind.CVE66127 ||
+            (exploit == ExploitKind.CVE61258 &&
+                (kernelVersion.contains("gdd6fd5c98918") ||
+                    kernelVersion.contains("g690108013dcc")))
+
     private fun supportsUniversal(): Boolean =
         exploit == ExploitKind.CVE61821 ||
             exploit == ExploitKind.CVE61269 ||
@@ -2681,7 +2690,8 @@ class MainActivity : ComponentActivity() {
             exploit == ExploitKind.CVE61223
 
     private fun supportsSusfs(): Boolean =
-        exploit != ExploitKind.CVE66118 && exploit != ExploitKind.UNSUPPORTED
+        !isGateKernel() && exploit != ExploitKind.CVE66118 &&
+            exploit != ExploitKind.UNSUPPORTED
 
     private fun managerChoices(): List<ManagerKind> =
         if (supportsUniversal()) ManagerKind.entries
@@ -2704,6 +2714,7 @@ class MainActivity : ComponentActivity() {
             "6.12.23-android16-5-g41f4cb1fa7c7-abogki465038634-4k" to ExploitKind.CVE61223,
             "6.6.118-android15-8-g9bc34d5b0c79-abogki537459655-4k" to ExploitKind.CVE66118,
             "6.6.118-android15-8-gc4127a25dcf3-ab15863337-4k" to ExploitKind.CVE66118,
+            "6.6.127-android15-8-gd489d4ad2a70-abogki567717946-4k" to ExploitKind.CVE66127,
         )
     }
 }

@@ -41,14 +41,16 @@ profile-switch module described in entry 9.
          lib/arm64-v8a/libsusfs_guard_lkm_612.so; both are loaded in place
          from nativeLibraryDir.
 
-4. YuKongA/CVE-2026-98260 (6.12.69-ex branch)
+4. YuKongA/CVE-2026-98260
    Source: https://github.com/YuKongA/CVE-2026-98260
-   License: none declared upstream (repository has no LICENSE file).
-   Used: timer.c modified with this project's fast-tuning and bundled via the
-         Rust single-entry runners as lib/arm64-v8a/libt61269.so (6.12.69) and
-         lib/arm64-v8a/libv2505a.so (iQOO 15 / V2505A, compiled with -DV2505A).
-         Redistribution is NOT cleared by the upstream author; treat this
-         binary as a local research build until a license/permission exists.
+   License: MIT (upstream license added 2026-11-12; copyright (c) 2026
+            YuKongA and woshigenm; full text:
+            third_party/cve-2026-98260-LICENSES/YuKongA-MIT.txt)
+   Used: timer UAF trigger and reclaim flow adapted from the 6.12.69-ex
+         branch's timer.c, tuned and shipped through the per-kernel runners
+         built from exploit/src/plant_core.inc: libk61269.so (6.12.69),
+         libk61238.so (6.12.38), libk61258.so (6.12.58), libk61223.so
+         (6.12.23), libk66118.so (6.6.118) and libk66127.so (6.6.127).
 
 5. Stellar (Shizuku fork) / Stellar API SDK
    Source: https://github.com/roro2239/Stellar (manager),

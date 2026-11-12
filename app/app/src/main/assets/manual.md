@@ -2,7 +2,7 @@
 
 Shark uses Stellar or Shizuku as shell to drive the device-side 98260 exploit and load the manager LKM. Complete authorization first, then one-tap jailbreak.
 
-> Shark currently supports OnePlus/OPPO/Realme/iQOO devices with kernels 6.18.21, 6.12.69, 6.12.38, 6.12.58, 6.12.23 and 6.6.118, matched by exact `uname -r`. Unsupported devices will be prompted.
+> Shark currently supports OnePlus/OPPO/Realme/iQOO devices with kernels 6.18.21, 6.12.69, 6.12.38, 6.12.58, 6.12.23, 6.6.118 and 6.6.127, matched by exact `uname -r`. Unsupported devices will be prompted.
 
 ## Quick Start
 
@@ -23,7 +23,7 @@ Shark uses Stellar or Shizuku as shell to drive the device-side 98260 exploit an
 
 **preflight** (kernel release / trace channel) → **98260 UAF** (fake cred / SELinux zero-write) → **cred child one-shot ksud late-load** → wait for module & su → **finish** (ksud install, unload kernel guard, SUSFS, VFS, screenshot restore, launch manager).
 
-Each kernel version has its own K source and `libk<version>.so`. Shared engine is in `plant_core.inc`. Vivo devices (6.12.23 / 6.12.58 vivo builds) zero the `__tracepoint_sys_exit->funcs` slot used by `vr.ko` before waking the root child.
+Each kernel version has its own K source and `libk<version>.so`. Shared engine is in `plant_core.inc`. Vivo devices (6.12.23 / 6.12.58 vivo builds / 6.6.127) zero the `__tracepoint_sys_exit->funcs` slot used by `vr.ko` before waking the root child. The 6.6.127 and 6.12.58 OS7 builds also use the `hooks_defend` loading-gate bypass.
 
 - Fast path: plant ~2–3 s, full flow ~4–9 s. Recycle misses add a few seconds — normal.
 - After any chain failure: plant keeps the holder; same boot can retry immediately. Do not manually kill or reap the holder.
@@ -41,7 +41,7 @@ Each kernel version has its own K source and `libk<version>.so`. Shared engine i
 
 | Log | Action |
 | --- | --- |
-| `PROBE_FAIL` / `kernel mismatch` | Current kernel not in supported list (exact `uname -r` match required for 6.18.21 / 6.12.69 / 6.12.38 / 6.12.58 / 6.12.23 / 6.6.118). |
+| `PROBE_FAIL` / `kernel mismatch` | Current kernel not in supported list (exact `uname -r` match required for 6.18.21 / 6.12.69 / 6.12.38 / 6.12.58 / 6.12.23 / 6.6.118 / 6.6.127). |
 | `MANAGER` / `KSUD_MISSING` | Install the corresponding manager APK first. |
 | `STALE_PLANT` | Previous plant still running; wait for it to become holder then retry. |
 | `PLANT_FAIL` | Plant keeps holder and exits; same boot can retry directly. |
@@ -53,6 +53,7 @@ Each kernel version has its own K source and `libk<version>.so`. Shared engine i
 - **6.18.21** → `libk61821.so`; **6.12.69** → `libk61269.so` (two OTA builds selected by uname).
 - **6.12.38 (PLR110)** → `libk61238.so`; **6.12.58 (PLZ110 / V2505A OS6/OS7)** → `libk61258.so`; **6.12.23 (V2505A)** → `libk61223.so`.
 - **6.6.118 (PKJ110 / PKH110 / Pad etc.)** → `libk66118.so` (two OTA builds by uname); KMI android15-6.6.
+- **6.6.127 (vivo X200 Ultra / PD2454)** → `libk66127.so`; KMI android15-6.6, using the vivo `hooks_defend` loading-gate bypass.
 - All matched by **exact `uname -r`**. Unmatched devices show "not supported" on One-Tap Jailbreak.
 - All entries run in-place from the app's native library dir. Child cwd/HOME/TMPDIR are under app filesDir; nothing is deployed to `/data/local/tmp`. ksud is executed from the installed manager APK. SUSFS supported on 6.18/6.12 (6.12 uses `libsusfs_guard_lkm_612.so`); 6.6.118 does not. VFS switch only for 6.18.
 - For research on your own devices only.

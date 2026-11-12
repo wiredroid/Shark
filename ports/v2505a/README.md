@@ -103,6 +103,53 @@ BTF 校验：
 - `sizeof(struct tracepoint) = 0x50`
 - `tracepoint.funcs = 0x48`
 
+## OS7 6.12.58（gdd6fd5c98918）hooks_defend 门
+
+OriginOS 7 的第二个 6.12.58 构建
+`6.12.58-android16-6-gdd6fd5c98918-abogki543627742-4k` 新增了 vivo
+`hooks_defend` 加载门（与 6.6.127 同一机制），普通 `ksud late-load` 会被拦。
+
+- 全量包：`https://sysuptxdl.vivo.com.cn/upgrade/oem/files/20261105053543df3dbd6f98071b0e38d9df5dab52b2b5.zip`
+- OTA metadata：`vivo/canoe/canoe:17/CP2A.260605.016/261104205930:user/release-keys`；
+  `post-version=PD2505_A_17.1.10.9.W10.V000L1`
+- boot：100,663,296 字节，SHA-256 `4557237b4eb31b31f62513fa9ac49c3090ff204230239359a97e55b44abc2a5f`
+- 内核 Image：41,306,624 字节，SHA-256
+  `fe2c8afae654d8b4f31bd4fe3c35ea9f642387b0fd191e8f83a1bf207f0c7337`
+- 本版常量：timer site `0xffffffc0805173e4`（low21 `0x1173e4`）、
+  copy site low21 `0x1f2218`、`__tracepoint_sys_exit` `0xffffffc0826d93e0`；
+  `modules` 静态地址 `0xffffffc0825d7d18`（+slide）
+- `struct module`（BTF 实测）：`list 0x8`、`name 0x18`、`sect_attrs 0x4f0`；
+  `module_sect_attr` stride `0x50`、`address 0x48`
+- 门处理与 6.6.127 相同：tracefs kread 定位 `hooks_defend`，读 `.data` 扫描
+  `g[14]+perm[14]`（perm 是 0..13 的排列）签名，零写 `g(perm[7])` 对齐字，
+  用 `khs_num`/`write_hash` 发布绑定后 KO 的 SHA-256 前 8 字节，fork worker
+  在进程内 `init_module`；门字零写 miss 时只对该阶段最多重试 3 轮（每轮
+  新 spray/新页），仍失败则快速失败并留 holder
+- 符号：`exploit/src/t61258os7_syms.h` 由 OS7 内核 Image 的 kallsyms 解析
+  6.12 KO 的 229 个未定义符号，并补齐 SukiSU 6.12 KO 的
+  `get_free_pages_noprof` / `vzalloc_noprof`，共 266 项
+- OS7 暂不提供 SUSFS（门的多条白名单未打通；SUSFS 关闭时的单条 n=1
+  已真机成功），保留 Dynamic Switching。SUSFS 的双哈希/两段式代码保留待后续，
+  App 暂时不启用。
+
+`recover.py` 与 OTA 提取流程同 OS6；内核 Image 的 kallsyms/BTF 解析结果与上表一致。
+
+### 11.4 构建（g690108013dcc）
+
+2026-11-11 的 11.4 OTA（patch，pre 17.1.10.12 → post 17.1.11.4）把内核换成
+`6.12.58-android16-6-g690108013dcc-abogki576129896-4k`。用户提供的 `boot_b.img`
+（100,663,296 B，sha256 `69f7231a…5f12`）与该增量包的 boot 目标哈希一致，是完整的
+目标 boot。
+
+- 内核 Image：41,372,160 B，sha256 `ae862162…cec0`
+- timer site `0xffffffc080517bec`（low21 `0x117bec`）；copy low21 `0x1f27b0`
+- selinux `0xffffffc0827d6520`、panic_on_warn `0xffffffc08253afe0`、
+  sys_exit `0xffffffc0826e93e0`、root_user/init_* 各 +0x10000
+- `modules` `0xffffffc0825e7d18`；`struct module` 布局与 gdd6fd 相同
+- 该 build 作为 `K61258` 的第三个 runtime profile（gate=1）；符号表改为双列
+  `t61258os7_syms.h`（gdd6fd / 114），由 `g_gate_114` 选择，exec'd wait 子进程
+  通过 argv 继承该标记
+
 ## 编译
 
 构建源码为 `exploit/src/plant_core.inc` 引擎 + `K61223_plant.c` / `K61258_plant.c`。
