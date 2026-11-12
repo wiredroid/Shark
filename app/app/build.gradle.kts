@@ -15,15 +15,15 @@ plugins {
 android {
     namespace = "com.shark.kty"
     compileSdk {
-        version = release(37) {
+        version = release(36) {
             minorApiLevel = 0
         }
     }
-    buildToolsVersion = "37.0.0"
+    buildToolsVersion = "36.0.0"
     defaultConfig {
         applicationId = "com.shark.kty"
         minSdk = 33
-        targetSdk = 37
+        targetSdk = 36
         versionCode = 91
         versionName = "2.1"
         ndk {
