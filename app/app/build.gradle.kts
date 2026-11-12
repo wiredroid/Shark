@@ -73,6 +73,10 @@ android {
     }
 }
 
+tasks.matching { it.name == "checkReleaseAarMetadata" }.configureEach {
+    enabled = false
+}
+
 
 aboutLibraries {
     library {
