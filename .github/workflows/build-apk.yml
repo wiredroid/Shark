@@ -29,6 +29,26 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Create temporary release signing key
+        working-directory: app
+        run: |
+          mkdir -p keystore
+          keytool -genkeypair \
+            -keystore keystore/release.jks \
+            -storepass android \
+            -keypass android \
+            -alias shark-release \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Shark Release, OU=Build, O=Shark, L=Unknown, ST=Unknown, C=US"
+          cat > keystore.properties <<'EOF'
+          storeFile=keystore/release.jks
+          storePassword=android
+          keyAlias=shark-release
+          keyPassword=android
+          EOF
+
       - name: Build release APK
         working-directory: app
         run: ./gradlew :app:assembleRelease --no-daemon
