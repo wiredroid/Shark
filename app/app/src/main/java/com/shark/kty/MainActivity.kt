@@ -2413,31 +2413,31 @@ class MainActivity : ComponentActivity() {
         addLog("Circuit breaker: checking for boot-loop risk...")
         val script = """
             MODDIR=/data/adb/modules
-            if [ ! -d "$MODDIR" ]; then
+            if [ ! -d "\$MODDIR" ]; then
                 echo "No modules directory"
                 exit 0
             fi
-            REBOOTS=$(getprop persist.sys.boot_count 2>/dev/null || echo 0)
+            REBOOTS=\$(getprop persist.sys.boot_count 2>/dev/null || echo 0)
             MARKER=/data/adb/.shark_boot_ok
-            if [ "$REBOOTS" -le 2 ] && [ -f "$MARKER" ]; then
+            if [ "\$REBOOTS" -le 2 ] && [ -f "\$MARKER" ]; then
                 echo "No boot-loop risk. Modules left untouched."
                 exit 0
             fi
-            echo "Boot-loop risk detected (reboots=$REBOOTS). Disabling newest modules only."
+            echo "Boot-loop risk detected (reboots=\$REBOOTS). Disabling newest modules only."
             # Disable only the 2 most recently modified module dirs by creating a disable file.
             # Never deletes module data.
-            ls -1td "$MODDIR"/*/ 2>/dev/null | head -n 2 | while read -r dir; do
-                [ -d "$dir" ] || continue
-                name=$(basename "$dir")
-                if [ ! -f "$dir/disable" ]; then
-                    touch "$dir/disable"
-                    echo "Disabled module: $name"
+            ls -1td "\$MODDIR"/*/ 2>/dev/null | head -n 2 | while read -r dir; do
+                [ -d "\$dir" ] || continue
+                name=\$(basename "\$dir")
+                if [ ! -f "\$dir/disable" ]; then
+                    touch "\$dir/disable"
+                    echo "Disabled module: \$name"
                 else
-                    echo "Already disabled: $name"
+                    echo "Already disabled: \$name"
                 fi
             done
             # Clear the ok marker so next successful boot can re-arm
-            rm -f "$MARKER"
+            rm -f "\$MARKER"
         """.trimIndent()
         val (rc, out) = runRootCommand(script, 15)
         out.lines().filter { it.isNotBlank() }.forEach { addLog("CB: $it") }
