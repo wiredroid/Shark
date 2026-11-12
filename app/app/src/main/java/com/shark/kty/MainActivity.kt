@@ -135,7 +135,6 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Notes
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.takeOrElse
@@ -172,7 +171,7 @@ import com.itos.coui.theme.LocalCouiContentColor
 import com.itos.coui.topappbar.TopAppBar
 import com.itos.coui.topappbar.TopAppBarButton
 
-private const val PROJECT_URL = "https://github.com/Yunnijian/Shark"
+private const val PROJECT_URL = "https://github.com/wiredroid/Shark"
 
 private data class LicenseText(
     val name: String,
@@ -2044,22 +2043,6 @@ class MainActivity : ComponentActivity() {
                         title = "View Source Code",
                         summary = "View source code on GitHub",
                         onClick = { uriHandler.openUri(PROJECT_URL) },
-                        trailing = { Chevron() }
-                    )
-                    Divider(startIndent = itemDividerIndent(), color = colors.divider)
-                    SettingItem(
-                        icon = Icons.Filled.Forum,
-                        title = "Join Community",
-                        summary = "Join QQ Group",
-                        onClick = { uriHandler.openUri("https://qm.qq.com/q/HMg4ngAC8W") },
-                        trailing = { Chevron() }
-                    )
-                    Divider(startIndent = itemDividerIndent(), color = colors.divider)
-                    SettingItem(
-                        icon = Icons.Filled.BugReport,
-                        title = "Report Issue",
-                        summary = "Submit on GitHub Issues",
-                        onClick = { uriHandler.openUri("$PROJECT_URL/issues") },
                         trailing = { Chevron() }
                     )
                     Divider(startIndent = itemDividerIndent(), color = colors.divider)

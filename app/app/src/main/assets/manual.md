@@ -33,7 +33,7 @@ Each kernel version has its own K source and `libk<version>.so`. Shared engine i
 - **Home**: ROOT manager dropdown, flow switches (VFS only on 6.18; vivo V2505A hides anti-root items; 6.6.118 hides SUSFS/VFS/hot-switch); info card shows kernel version and auto-selected exploit.
 - **Logs**: Real-time streaming log of the current run.
 - **History**: Each run saves a `.log`; tap to view full text, swipe left to export/share.
-- **About**: Version, check update, source code / community / feedback, AboutLibraries dependency list (with versions and licenses), and offline-bundled open source license texts (GPL-3.0, NOTICE, Apache-2.0, MIT, GPL-2.0, MPL-2.0).
+- **About**: Version, check update, source code, PayPal support, AboutLibraries dependency list (with versions and licenses), and offline-bundled open source license texts (GPL-3.0, NOTICE, Apache-2.0, MIT, GPL-2.0, MPL-2.0).
 - **Extra Features → Droidspaces Support** (6.18.21 only): Tap "Download Module" to fetch the latest `Droidspaces-LKM` release from GitHub, download the zip to `Download/Shark/`, then flash it in KernelSU Manager → Modules → Install. Module is not bundled in the APK.
 - **ROOT Manager → Dynamic Switching** (6.18.21 / 6.12.69 / 6.12.38 / 6.12.58 / 6.12.23; not 6.6.118): First clean boot loads the universal KSU LKM via `libksud_universal.so` (initial KernelSU). After load, Extra Features shows "Manager Hot Switch" to switch between KernelSU / KernelSU-Next / BakaSU / SukiSU / FinaSU without reboot or re-jailbreak. Target manager is re-opened after switch.
 
