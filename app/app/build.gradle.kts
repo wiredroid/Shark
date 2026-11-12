@@ -100,3 +100,17 @@ dependencies {
     implementation("dev.rikka.shizuku:provider:13.1.5")
     implementation("com.github.roro2239:Stellar-API:1.0.3")
 }
+
+configurations.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "org.jetbrains.kotlin" &&
+            requested.name.startsWith("kotlin-stdlib")
+        ) {
+            useVersion("2.2.21")
+        }
+    }
+}
+
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    kotlinOptions.freeCompilerArgs += "-Xskip-metadata-version-check"
+}
