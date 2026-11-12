@@ -2513,10 +2513,11 @@ class MainActivity : ComponentActivity() {
         if (rc != 0) addLog("Module toggle warning rc=$rc")
     }
 
-    private fun scheduleSecondSoftReboot(): Int = runCatching {
+    private fun scheduleSecondSoftReboot(delayMin: Int): Int = runCatching {
+        val delaySeconds = if (delayMin > 0) delayMin * 60 else 12
         val script = """
             (
-                sleep 12
+                sleep $delaySeconds
                 MODDIR=/data/adb/modules
                 if [ -d "${'$'}MODDIR" ]; then
                     find "${'$'}MODDIR" -mindepth 2 -maxdepth 2 -name disable -delete 2>/dev/null
@@ -2708,14 +2709,19 @@ class MainActivity : ComponentActivity() {
                         else {
                             addLog("First soft reboot initiated")
                             if (secondSoftReboot) {
-                                val scheduleRc = scheduleSecondSoftReboot()
+                                val scheduleRc = scheduleSecondSoftReboot(delayMin)
                                 if (scheduleRc == 0) {
                                     getSharedPreferences("pyb110", MODE_PRIVATE)
                                         .edit()
                                         .putBoolean("pending_zygisk_reboot", false)
                                         .putBoolean("second_reboot_scheduled", true)
                                         .apply()
-                                    addLog("Second soft reboot scheduled in 12 seconds")
+                                    val secondDelay = if (delayMin > 0) {
+                                        softRebootDelayLabel(delayMin)
+                                    } else {
+                                        "12 seconds"
+                                    }
+                                    addLog("Second soft reboot scheduled $secondDelay")
                                 } else {
                                     addLog("Second soft reboot scheduling failed rc=$scheduleRc")
                                 }
