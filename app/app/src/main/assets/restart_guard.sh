@@ -6,6 +6,7 @@ umask 077
 BASE=/data/adb/shark-restart-guard
 BOOT_FILE=/proc/sys/kernel/random/boot_id
 SELF=/data/adb/shark-restart-guard/controller.sh
+RECEIPT=/data/user/0/com.shark.kty/files/automatic-boot-complete
 LIMIT=180
 STABLE=15
 mkdir -p "$BASE" || exit 70
@@ -159,6 +160,11 @@ case "$1" in
             restart_once second_requested
         fi
         put_phase complete || exit 74
+        # MainActivity creates this file with its own UID and SELinux category.
+        # Preserve both by writing the existing file only; an interrupted write fails closed.
+        if [ -f "$RECEIPT" ] && [ ! -L "$RECEIPT" ]; then
+            printf '%s\n' "$boot" > "$RECEIPT" || echo 'Could not save the automatic-boot completion receipt.'
+        fi
         echo 'Requested framework restarts completed. Module functionality still requires verification.'
         ;;
     *) exit 86;;

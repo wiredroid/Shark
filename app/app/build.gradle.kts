@@ -24,8 +24,8 @@ android {
         applicationId = "com.shark.kty"
         minSdk = 33
         targetSdk = 37
-        versionCode = 100
-        versionName = "2.2.8"
+        versionCode = 101
+        versionName = "2.2.9"
         ndk {
             abiFilters.add("arm64-v8a")
         }
@@ -85,6 +85,7 @@ aboutLibraries {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     implementation(platform("androidx.compose:compose-bom:2026.09.00"))
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.ui:ui")

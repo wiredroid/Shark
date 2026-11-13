@@ -252,6 +252,7 @@ class MainActivity : ComponentActivity() {
     private var selinuxText by mutableStateOf("Unknown")
     private var antiRootGuard by mutableStateOf(true)
     private var softRebootAfter by mutableStateOf(false)
+    private var restoreRootAfterBoot by mutableStateOf(false)
     private var secondSoftReboot by mutableStateOf(false)
     private var softRebootDelayMin by mutableStateOf(0)
     private val softRebootDelays = listOf(0, 1, 2, 3)
@@ -402,6 +403,8 @@ class MainActivity : ComponentActivity() {
         )
         window.isNavigationBarContrastEnforced = false
         super.onCreate(savedInstanceState)
+        BootAutomation.receipt(this).apply { if (!exists()) createNewFile() }
+        restoreRootAfterBoot = BootAutomation.enabled(this)
         Shizuku.addRequestPermissionResultListener(permissionListener)
         Shizuku.addBinderReceivedListenerSticky(binderListener)
         Stellar.addRequestPermissionResultListener(stellarPermissionListener)
@@ -432,6 +435,35 @@ class MainActivity : ComponentActivity() {
         setContent {
             CouiTheme(darkTheme = isSystemInDarkTheme()) {
                 AppRoot()
+            }
+        }
+        BootAutomation.schedule(this)
+        continueAutomaticBoot(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        continueAutomaticBoot(intent)
+    }
+
+    private fun continueAutomaticBoot(request: Intent) {
+        if (request.action != BootAutomation.ACTION) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            val boot = runCatching { BootAutomation.physicalBoot() }.getOrNull() ?: return@launch
+            withContext(Dispatchers.Main) {
+                if (!busy && BootAutomation.claim(this@MainActivity, request, boot)) runFlow(automatic = true)
+            }
+        }
+    }
+
+    private fun updateAutomaticBoot(value: Boolean) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val saved = runCatching { BootAutomation.setEnabled(this@MainActivity, value) }.getOrDefault(false)
+            withContext(Dispatchers.Main) {
+                restoreRootAfterBoot = BootAutomation.enabled(this@MainActivity)
+                Toast.makeText(this@MainActivity, if (saved) BootAutomation.message(this@MainActivity)
+                    else "Start and authorize Shevery, Shizuku or Stellar first", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -1425,6 +1457,21 @@ class MainActivity : ComponentActivity() {
                             title = "Disable security popups after jailbreak",
                             checked = antiRootGuard,
                             onCheckedChange = { updateAntiRootGuard(it) }
+                        )
+                        Divider(startIndent = itemDividerIndent(), color = colors.divider)
+                        SettingSwitchItem(
+                            icon = Icons.Filled.RestartAlt,
+                            title = "Restore root after full restart",
+                            checked = restoreRootAfterBoot,
+                            onCheckedChange = { updateAutomaticBoot(it) }
+                        )
+                        Divider(startIndent = itemDividerIndent(), color = colors.divider)
+                        SettingItem(
+                            icon = Icons.Filled.Info,
+                            title = "Automatic startup status",
+                            summary = "Waits for unlock and your authorized helper",
+                            onClick = { Toast.makeText(this@MainActivity, BootAutomation.message(this@MainActivity), Toast.LENGTH_LONG).show() },
+                            trailing = { Chevron() }
                         )
                         Divider(startIndent = itemDividerIndent(), color = colors.divider)
                         SettingSwitchItem(
@@ -2542,7 +2589,8 @@ class MainActivity : ComponentActivity() {
             }.show()
     }
 
-    private fun runFlow() {
+    private fun runFlow(automatic: Boolean = false) {
+        if (busy) return
         busy = true
         val softReboot = softRebootAfter
         val startedAt = System.currentTimeMillis()
@@ -2566,6 +2614,17 @@ class MainActivity : ComponentActivity() {
                     return@launch
                 }
                 val (alreadyActive, _) = readDeviceState()
+                if (automatic && alreadyActive) {
+                    addLog("Automatic startup found existing root; skipping the native root command.")
+                    if (softReboot) {
+                        val (armRc, armOutput) = restartHandoff("arm", arm = true)
+                        addLog("Existing-root restart handoff ($armRc): $armOutput")
+                        if (armRc == 0) restartHandoff("result 0")
+                    } else BootAutomation.physicalBoot()?.let { BootAutomation.receipt(this@MainActivity).writeText(it) }
+                    success = true
+                    exit = 0
+                    return@launch
+                }
                 val ksudPreflight = PrivService.newProcess(
                     arrayOf("sh", "-c",
                         "[ -n \"$(pm path '${manager.pkg}' 2>/dev/null)\" ] || [ -x /data/adb/ksu/bin/ksud ] || [ -x /data/adb/ksud ]"),
@@ -2618,6 +2677,9 @@ class MainActivity : ComponentActivity() {
                 addLog("exploit exit=$rc")
                 val (active, se) = readDeviceState()
                 success = rc == 0 && active
+                if (automatic && success && !softReboot) BootAutomation.physicalBoot()?.let {
+                    BootAutomation.receipt(this@MainActivity).writeText(it)
+                }
                 withContext(Dispatchers.Main) {
                     ksuActive = active
                     selinuxText = se

@@ -22,6 +22,7 @@ class RestartGuardTest(unittest.TestCase):
             (self.attempt / name).write_text(value+'\n')
         (self.root / 'boot').write_text('boot-a\n')
         (self.root / 'pid').write_text('100\n')
+        (self.root / 'receipt').write_text('previous-boot\n')
         self.bin = self.root / 'bin'
         self.bin.mkdir()
         stub = '''#!/bin/sh
@@ -48,6 +49,7 @@ esac
         script = SOURCE.replace('PATH=/system/bin:/system/xbin', f'PATH="{self.posix}/bin:/usr/bin:/bin"')
         script = script.replace('BASE=/data/adb/shark-restart-guard', f'BASE="{self.posix}/state"')
         script = script.replace('BOOT_FILE=/proc/sys/kernel/random/boot_id', f'BOOT_FILE="{self.posix}/boot"')
+        script = script.replace('RECEIPT=/data/user/0/com.shark.kty/files/automatic-boot-complete', f'RECEIPT="{self.posix}/receipt"')
         script = script.replace('/data/adb/ksud', self.posix+'/bin/ksud')
         script = script.replace('LIMIT=180','LIMIT=5').replace('STABLE=15','STABLE=2')
         script = script.replace('/data/adb/post-fs-data.d/shark_rescue.sh', self.posix+'/legacy.sh').replace('/data/adb/shark_boot_flag',self.posix+'/legacy-flag')
@@ -77,6 +79,12 @@ esac
         self.assertEqual(self.run_guard('run').returncode,0)
         self.assertEqual(self.count(),1)
         self.assertEqual(self.phase(),'complete')
+    def test_completion_receipt_is_written_after_both_restarts(self):
+        self.assertEqual(self.run_guard('run').returncode,0)
+        self.assertEqual((self.root/'receipt').read_text().strip(), 'boot-a')
+    def test_failed_second_restart_does_not_mark_boot_successful(self):
+        self.assertNotEqual(self.run_guard('run', FAIL_AT='2').returncode,0)
+        self.assertEqual((self.root/'receipt').read_text().strip(), 'previous-boot')
     def test_first_observed_and_second_disabled_never_restarts(self):
         (self.attempt/'first_observed').write_text('1')
         (self.attempt/'second').write_text('0')
