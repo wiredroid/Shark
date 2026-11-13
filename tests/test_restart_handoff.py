@@ -30,8 +30,13 @@ case "${0##*/}" in
  getprop) case "$1" in init.svc.zygote) echo running;; *) echo 1;; esac;;
  am)
    if [ "$1" = broadcast ]; then
+     echo dispatch >> "$FIXTURE/events"
      echo "$*" >> "$FIXTURE/requests"
      [ "$FAIL_BROADCAST" = 1 ] && exit 3
+     exit 0
+   elif [ "$1" = start ]; then
+     echo wake >> "$FIXTURE/events"
+     [ "$FAIL_WAKE" = 1 ] && exit 4
      exit 0
    else echo "${USER_STATE:-RUNNING_UNLOCKED}"; fi;;
  su)
@@ -65,6 +70,10 @@ esac
         self.assertEqual(r.returncode,0,r.stdout+r.stderr)
         self.assertEqual(len(self.requests()),1)
         self.assertTrue(self.requests()[0].endswith('--es token test-token --es boot boot-a --ez first_observed true'))
+        self.assertEqual((self.root/'events').read_text().splitlines(),['wake','dispatch'])
+    def test_failed_wakeup_does_not_broadcast(self):
+        self.assertNotEqual(self.run_handoff('watch',FAIL_WAKE='1').returncode,0)
+        self.assertEqual(self.requests(),[])
     def test_normal_exit_before_any_restart_requests_both(self):
         (self.root/'pid').write_text('100\n')
         (self.state/'result').write_text('0\n')

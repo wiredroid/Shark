@@ -99,6 +99,10 @@ case "$1" in
                     case "$token" in ''|*[!a-zA-Z0-9-]*) pause 'Invalid handoff token.';; esac
                     echo "First restart observed=$observed; dispatching to Shark's own root grant."
                     if [ "$observed" = 1 ]; then first=true; else first=false; fi
+                    # Android may defer even urgent broadcasts to a cached app.
+                    # Wake the existing Activity first; it never starts root on resume.
+                    timeout 12 am start --activity-single-top -n com.shark.kty/.MainActivity >"$state/wakeup.log" 2>&1 ||
+                        pause 'Could not bring Shark forward for continuation. Manual root remains available.'
                     timeout 12 am broadcast --receiver-foreground --include-stopped-packages \
                         -n com.shark.kty/.RestartHandoffReceiver \
                         -a com.shark.kty.CONTINUE_RESTART \

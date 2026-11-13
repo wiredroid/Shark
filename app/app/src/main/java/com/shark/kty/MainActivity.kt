@@ -275,7 +275,6 @@ class MainActivity : ComponentActivity() {
     private var updateProgress by mutableStateOf(0f)
     private var updateError by mutableStateOf<String?>(null)
     private var pendingApk by mutableStateOf<File?>(null)
-    private var updateCheckedThisForeground = false
     private var droidspacesDialogVisible by mutableStateOf(false)
     private var droidspacesLoading by mutableStateOf(false)
     private var droidspacesRelease by mutableStateOf<DroidspacesRelease?>(null)
@@ -312,31 +311,9 @@ class MainActivity : ComponentActivity() {
         if (ok) refreshKsuAsync()
     }
 
-    override fun onStart() {
-        super.onStart()
-        if (updateCheckedThisForeground) return
-        updateCheckedThisForeground = true
-        if (updateDialogVisible || updateDownloading) return
-        lifecycleScope.launch {
-            when (val result = runCatching {
-                UpdateChecker.check(applicationContext)
-            }.getOrNull()) {
-                is UpdateCheckResult.Available -> {
-                    if (!updateDialogVisible) {
-                        pendingUpdate = result.info
-                        pendingApk = null
-                        updateError = null
-                        updateDialogVisible = true
-                    }
-                }
-                else -> Unit
-            }
-        }
-    }
-
     private fun checkForUpdatesManually() {
         if (updateDownloading) return
-        Toast.makeText(this, "Checking for updatesâ€¦", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Checking for updates...", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             when (val result = runCatching {
                 UpdateChecker.check(applicationContext)
@@ -346,6 +323,9 @@ class MainActivity : ComponentActivity() {
                     pendingApk = null
                     updateError = null
                     updateDialogVisible = true
+                }
+                UpdateCheckResult.NoPublishedRelease -> {
+                    Toast.makeText(this@MainActivity, "No installable releases are published in wiredroid/Shark yet", Toast.LENGTH_LONG).show()
                 }
                 UpdateCheckResult.UpToDate -> {
                     Toast.makeText(this@MainActivity, "Already up to date", Toast.LENGTH_SHORT).show()
@@ -406,7 +386,6 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        updateCheckedThisForeground = false
         super.onStop()
     }
 
@@ -1020,7 +999,7 @@ class MainActivity : ComponentActivity() {
                     .padding(horizontal = CouiDialogDefaults.contentPadding)
             ) {
                 Text(
-                    text = "Current ${BuildConfig.VERSION_NAME}  Â·  Source ${info.source}",
+                    text = "Current ${BuildConfig.VERSION_NAME} | Source ${info.source}",
                     kind = CouiTextKind.PreferenceSummary,
                     color = scheme.onSurfaceVariant,
                     textAlign = TextAlign.Start
@@ -1037,7 +1016,8 @@ class MainActivity : ComponentActivity() {
                     CouiProgressBar(updateProgress)
                 } else {
                     Spacer(Modifier.height(12.dp))
-                    DialogBody(info.changelog.ifBlank { "No changelog" })
+                    DialogBody(info.changelog.ifBlank { "No release notes were provided." })
+                    DialogLink("View release on GitHub") { uriHandler.openUri(info.pageUrl) }
                     updateError?.let {
                         Spacer(Modifier.height(8.dp))
                         Text(
