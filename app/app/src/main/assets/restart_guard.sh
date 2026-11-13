@@ -13,6 +13,7 @@ mkdir -p "$BASE" || exit 70
 boot=$(cat "$BOOT_FILE") || exit 72
 case "$boot" in ''|*[!a-zA-Z0-9-]*) exit 72;; esac
 state="$BASE/attempt"
+control="$BASE/control-$boot.lock"
 phase() { cat "$state/phase" 2>/dev/null; }
 put_phase() {
     printf '%s\n' "$1" > "$state/phase.new" &&
@@ -77,8 +78,8 @@ case "$1" in
         exit 0
         ;;
     reset)
-        mkdir "$BASE/control.lock" 2>/dev/null || exit 75
-        trap 'rmdir "$BASE/control.lock"' EXIT
+        mkdir "$control" 2>/dev/null || exit 75
+        trap 'rmdir "$control"' EXIT
         case "$(phase)" in
             paused|complete) ;;
             '') exit 0;;
@@ -91,8 +92,8 @@ case "$1" in
         ;;
     launch)
         case "$2:$3" in 0:0|0:1|0:2|0:3|1:0|1:1|1:2|1:3) ;; *) exit 78;; esac
-        mkdir "$BASE/control.lock" 2>/dev/null || { echo 'Another request is in progress.'; exit 75; }
-        trap 'rmdir "$BASE/control.lock"' EXIT
+        mkdir "$control" 2>/dev/null || { echo 'Another request is in progress.'; exit 75; }
+        trap 'rmdir "$control"' EXIT
         if [ -d "$state" ]; then
             if ! same_boot && [ "$(phase)" = complete ]; then
                 mv "$state" "$BASE/history-$(date +%s)-$$" || exit 77
@@ -145,3 +146,4 @@ case "$1" in
         ;;
     *) exit 86;;
 esac
+

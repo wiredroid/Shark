@@ -29,10 +29,13 @@ case "${0##*/}" in
  id) echo "${FAKE_UID:-0}";;
  pidof) cat "$FIXTURE/pid";;
  getprop) case "$1" in init.svc.zygote) echo running;; *) echo 1;; esac;;
- am) echo "${USER_STATE:-RUNNING_UNLOCKED}";;
+ am)
+   if [ "$LOCK_AFTER_ONE" = 1 ] && [ -f "$FIXTURE/requests" ]; then echo RUNNING_LOCKED;
+   else echo "${USER_STATE:-RUNNING_UNLOCKED}"; fi;;
  setprop)
    echo "$*" >> "$FIXTURE/requests"
    [ "$FAIL_REQUEST" = 1 ] && exit 1
+   [ "$FAIL_AT" = "$(wc -l < "$FIXTURE/requests" | tr -d ' ')" ] && exit 1
    [ "$NO_CHANGE" = 1 ] || echo $(($(cat "$FIXTURE/pid") + 1)) > "$FIXTURE/pid"
    ;;
  sleep|sync|nohup|setsid) exit 0;;
@@ -129,5 +132,24 @@ esac
         self.assertNotEqual(self.run_guard('run').returncode,0)
         self.assertEqual(self.count(),0)
         self.assertEqual(self.phase(),'paused')
+    def test_second_request_failure_never_requests_a_third(self):
+        self.assertNotEqual(self.run_guard('run', FAIL_AT='2').returncode,0)
+        self.assertEqual(self.count(),2)
+        self.assertEqual(self.phase(),'paused')
+    def test_owner_not_unlocked_after_first_prevents_second(self):
+        self.assertNotEqual(self.run_guard('run', LOCK_AFTER_ONE='1').returncode,0)
+        self.assertEqual(self.count(),1)
+        self.assertEqual(self.phase(),'paused')
+    def test_stale_lock_from_an_old_boot_does_not_block_reset(self):
+        (self.state/'control-boot-old.lock').mkdir()
+        (self.attempt/'phase').write_text('paused')
+        self.assertEqual(self.run_guard('reset').returncode,0)
+        self.assertEqual(self.count(),0)
+    def test_fresh_launch_only_queues_worker(self):
+        shutil.rmtree(self.attempt)
+        self.assertEqual(self.run_guard('launch','1','0').returncode,0)
+        self.assertEqual(self.phase(),'queued')
+        self.assertEqual(self.count(),0)
 
 if __name__ == '__main__': unittest.main(verbosity=2)
+
