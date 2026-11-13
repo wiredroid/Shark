@@ -252,9 +252,9 @@ class MainActivity : ComponentActivity() {
     private var selinuxText by mutableStateOf("Unknown")
     private var antiRootGuard by mutableStateOf(true)
     private var softRebootAfter by mutableStateOf(false)
+    private var restoreRootAfterBoot by mutableStateOf(false)
     private var secondSoftReboot by mutableStateOf(false)
     private var softRebootDelayMin by mutableStateOf(0)
-    private var softRebootJob: Job? = null
     private val softRebootDelays = listOf(0, 1, 2, 3)
     private var unloadGuard by mutableStateOf(true)
     private var susfsSupport by mutableStateOf(false)
@@ -276,7 +276,6 @@ class MainActivity : ComponentActivity() {
     private var updateProgress by mutableStateOf(0f)
     private var updateError by mutableStateOf<String?>(null)
     private var pendingApk by mutableStateOf<File?>(null)
-    private var updateCheckedThisForeground = false
     private var droidspacesDialogVisible by mutableStateOf(false)
     private var droidspacesLoading by mutableStateOf(false)
     private var droidspacesRelease by mutableStateOf<DroidspacesRelease?>(null)
@@ -313,32 +312,9 @@ class MainActivity : ComponentActivity() {
         if (ok) refreshKsuAsync()
     }
 
-    override fun onStart() {
-        super.onStart()
-        maybeSecondSoftReboot()
-        if (updateCheckedThisForeground) return
-        updateCheckedThisForeground = true
-        if (updateDialogVisible || updateDownloading) return
-        lifecycleScope.launch {
-            when (val result = runCatching {
-                UpdateChecker.check(applicationContext)
-            }.getOrNull()) {
-                is UpdateCheckResult.Available -> {
-                    if (!updateDialogVisible) {
-                        pendingUpdate = result.info
-                        pendingApk = null
-                        updateError = null
-                        updateDialogVisible = true
-                    }
-                }
-                else -> Unit
-            }
-        }
-    }
-
     private fun checkForUpdatesManually() {
         if (updateDownloading) return
-        Toast.makeText(this, "Checking for updates…", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Checking for updates...", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             when (val result = runCatching {
                 UpdateChecker.check(applicationContext)
@@ -348,6 +324,9 @@ class MainActivity : ComponentActivity() {
                     pendingApk = null
                     updateError = null
                     updateDialogVisible = true
+                }
+                UpdateCheckResult.NoPublishedRelease -> {
+                    Toast.makeText(this@MainActivity, "No installable releases are published in wiredroid/Shark yet", Toast.LENGTH_LONG).show()
                 }
                 UpdateCheckResult.UpToDate -> {
                     Toast.makeText(this@MainActivity, "Already up to date", Toast.LENGTH_SHORT).show()
@@ -408,7 +387,6 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        updateCheckedThisForeground = false
         super.onStop()
     }
 
@@ -425,11 +403,9 @@ class MainActivity : ComponentActivity() {
         )
         window.isNavigationBarContrastEnforced = false
         super.onCreate(savedInstanceState)
-        lifecycleScope.launch(Dispatchers.IO) {
-            runCatching {
-                ProcessBuilder("su", "-c", "rm -f /data/adb/shark_boot_flag").start().waitFor()
-            }
-        }
+        BootAutomation.receipt(this).apply { if (!exists()) createNewFile() }
+        File(filesDir, "restart-controller-status.txt").apply { if (!exists()) createNewFile() }
+        restoreRootAfterBoot = BootAutomation.enabled(this)
         Shizuku.addRequestPermissionResultListener(permissionListener)
         Shizuku.addBinderReceivedListenerSticky(binderListener)
         Stellar.addRequestPermissionResultListener(stellarPermissionListener)
@@ -442,14 +418,6 @@ class MainActivity : ComponentActivity() {
             .getBoolean("second_soft_reboot", false)
         softRebootDelayMin = getSharedPreferences("pyb110", MODE_PRIVATE)
             .getInt("soft_reboot_delay_min", 0)
-        if (!getSharedPreferences("pyb110", MODE_PRIVATE)
-                .getBoolean("pending_zygisk_reboot", false)
-        ) {
-            getSharedPreferences("pyb110", MODE_PRIVATE)
-                .edit()
-                .remove("second_reboot_scheduled")
-                .apply()
-        }
         unloadGuard = getSharedPreferences("pyb110", MODE_PRIVATE).getBoolean("unload_guard", true)
         susfsSupport = getSharedPreferences("pyb110", MODE_PRIVATE).getBoolean("susfs_support", false)
         vfsSupport = getSharedPreferences("pyb110", MODE_PRIVATE).getBoolean("vfs_support", false)
@@ -465,10 +433,38 @@ class MainActivity : ComponentActivity() {
         deviceModel = resolveDeviceName()
         refreshStaticStateAsync()
         refreshKsuAsync()
-        maybeSecondSoftReboot()
         setContent {
             CouiTheme(darkTheme = isSystemInDarkTheme()) {
                 AppRoot()
+            }
+        }
+        BootAutomation.schedule(this)
+        continueAutomaticBoot(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        continueAutomaticBoot(intent)
+    }
+
+    private fun continueAutomaticBoot(request: Intent) {
+        if (request.action != BootAutomation.ACTION) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            val boot = runCatching { BootAutomation.physicalBoot() }.getOrNull() ?: return@launch
+            withContext(Dispatchers.Main) {
+                if (!busy && BootAutomation.claim(this@MainActivity, request, boot)) runFlow(automatic = true)
+            }
+        }
+    }
+
+    private fun updateAutomaticBoot(value: Boolean) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val saved = runCatching { BootAutomation.setEnabled(this@MainActivity, value) }.getOrDefault(false)
+            withContext(Dispatchers.Main) {
+                restoreRootAfterBoot = BootAutomation.enabled(this@MainActivity)
+                Toast.makeText(this@MainActivity, if (saved) BootAutomation.message(this@MainActivity)
+                    else "Start and authorize Shevery, Shizuku or Stellar first", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -868,7 +864,7 @@ class MainActivity : ComponentActivity() {
             ) {
                 when {
                     droidspacesLoading -> Text(
-                        text = "Fetching latest release…",
+                        text = "Fetching latest releaseâ€¦",
                         kind = CouiTextKind.Body,
                         color = scheme.onSurfaceVariant,
                         textAlign = TextAlign.Start
@@ -888,7 +884,7 @@ class MainActivity : ComponentActivity() {
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = "${release.assetName} · ${formatSize(release.assetSize)}",
+                            text = "${release.assetName} Â· ${formatSize(release.assetSize)}",
                             kind = CouiTextKind.PreferenceSummary,
                             color = scheme.onSurfaceVariant,
                             textAlign = TextAlign.Start
@@ -916,7 +912,7 @@ class MainActivity : ComponentActivity() {
                             }
                             Spacer(Modifier.height(8.dp))
                             Text(
-                                text = "Go to KernelSU Manager → Modules → Install and select this file.",
+                                text = "Go to KernelSU Manager â†’ Modules â†’ Install and select this file.",
                                 kind = CouiTextKind.Body,
                                 color = scheme.onSurface,
                                 textAlign = TextAlign.Start
@@ -1036,7 +1032,7 @@ class MainActivity : ComponentActivity() {
                     .padding(horizontal = CouiDialogDefaults.contentPadding)
             ) {
                 Text(
-                    text = "Current ${BuildConfig.VERSION_NAME}  ·  Source ${info.source}",
+                    text = "Current ${BuildConfig.VERSION_NAME} | Source ${info.source}",
                     kind = CouiTextKind.PreferenceSummary,
                     color = scheme.onSurfaceVariant,
                     textAlign = TextAlign.Start
@@ -1053,7 +1049,8 @@ class MainActivity : ComponentActivity() {
                     CouiProgressBar(updateProgress)
                 } else {
                     Spacer(Modifier.height(12.dp))
-                    DialogBody(info.changelog.ifBlank { "No changelog" })
+                    DialogBody(info.changelog.ifBlank { "No release notes were provided." })
+                    DialogLink("View release on GitHub") { uriHandler.openUri(info.pageUrl) }
                     updateError?.let {
                         Spacer(Modifier.height(8.dp))
                         Text(
@@ -1301,7 +1298,7 @@ class MainActivity : ComponentActivity() {
     private fun PrimaryActionCard() {
         val colors = CouiPageDefaults.themeColors()
         val label = when {
-            busy -> "Running…"
+            busy -> "Runningâ€¦"
             !binderReady -> "Stellar not running (tap to open)"
             !authorized -> "Authorize Shizuku"
             ksuActive -> "Verify / Jailbreak Again"
@@ -1465,6 +1462,21 @@ class MainActivity : ComponentActivity() {
                         Divider(startIndent = itemDividerIndent(), color = colors.divider)
                         SettingSwitchItem(
                             icon = Icons.Filled.RestartAlt,
+                            title = "Restore root after full restart",
+                            checked = restoreRootAfterBoot,
+                            onCheckedChange = { updateAutomaticBoot(it) }
+                        )
+                        Divider(startIndent = itemDividerIndent(), color = colors.divider)
+                        SettingItem(
+                            icon = Icons.Filled.Info,
+                            title = "Automatic startup status",
+                            summary = "Waits for unlock and your authorized helper",
+                            onClick = { Toast.makeText(this@MainActivity, BootAutomation.message(this@MainActivity), Toast.LENGTH_LONG).show() },
+                            trailing = { Chevron() }
+                        )
+                        Divider(startIndent = itemDividerIndent(), color = colors.divider)
+                        SettingSwitchItem(
+                            icon = Icons.Filled.RestartAlt,
                             title = "Soft reboot after jailbreak",
                             checked = softRebootAfter,
                             onCheckedChange = { updateSoftRebootAfter(it) }
@@ -1487,6 +1499,19 @@ class MainActivity : ComponentActivity() {
                                 onSelect = { updateSoftRebootDelay(it) }
                             )
                         }
+                        SettingItem(
+                            icon = Icons.Filled.RestartAlt,
+                            title = "Restart status",
+                            summary = "Disabled modules stay disabled. Unlock after each restart.",
+                            onClick = { showRestartStatus() },
+                            trailing = { Chevron() }
+                        )
+                        SettingItem(
+                            icon = Icons.Filled.RestartAlt,
+                            title = "Acknowledge restart safety hold",
+                            onClick = { confirmRestartReset() },
+                            trailing = { Chevron() }
+                        )
                         Divider(startIndent = itemDividerIndent(), color = colors.divider)
                         SettingSwitchItem(
                             icon = Icons.Filled.RemoveModerator,
@@ -2251,16 +2276,22 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun updateSoftRebootAfter(value: Boolean) {
+        if (!value) lifecycleScope.launch(Dispatchers.IO) {
+            restartHandoff("cancel")
+            val (rc, output) = restartController("cancel")
+            addLog("Cancel pending restarts ($rc): $output")
+        }
         softRebootAfter = value
         getSharedPreferences("pyb110", MODE_PRIVATE).edit().putBoolean("soft_reboot_after", value).apply()
-        if (!value) {
-            softRebootJob?.cancel()
-            softRebootJob = null
-        }
         addLog("Soft reboot after jailbreak: ${if (value) "on" else "off"}")
     }
 
     private fun updateSecondSoftReboot(value: Boolean) {
+        if (!value) lifecycleScope.launch(Dispatchers.IO) {
+            restartHandoff("cancel")
+            val (rc, output) = restartController("cancel")
+            addLog("Cancel pending restarts ($rc): $output")
+        }
         secondSoftReboot = value
         getSharedPreferences("pyb110", MODE_PRIVATE).edit()
             .putBoolean("second_soft_reboot", value)
@@ -2464,125 +2495,104 @@ class MainActivity : ComponentActivity() {
     }
 
 
-    private fun doSoftReboot(): Int = runCatching {
-        PrivService.newProcess(
-            arrayOf("su", "-c", "setprop ctl.restart zygote"),
-            shizukuEnv(), "/"
-        ).waitFor()
-    }.getOrDefault(-1)
+    private fun shellQuote(value: String) = "'" + value.replace("'", "'\"'\"'") + "'"
 
-    /** Enable modules, then briefly toggle the newest one so Zygisk re-evaluates. Does not delete anything. */
-    private fun toggleModulesForZygisk() {
-        val script = """
-            MODDIR=/data/adb/modules
-            if [ ! -d "${'$'}MODDIR" ]; then
-                echo "No modules directory"
-                exit 0
-            fi
-            # Ensure modules are enabled
-            find "${'$'}MODDIR" -mindepth 2 -maxdepth 2 -name disable -delete 2>/dev/null
-            # Toggle the newest module (disable then re-enable) to force a Zygisk refresh
-            newest=$(ls -1td "${'$'}MODDIR"/*/ 2>/dev/null | head -n 1)
-            if [ -n "${'$'}newest" ] && [ -d "${'$'}newest" ]; then
-                touch "${'$'}newest/disable"
-                rm -f "${'$'}newest/disable"
-                echo "Toggled module: $(basename "${'$'}newest")"
-            else
-                echo "No module to toggle"
-            fi
-        """.trimIndent()
-        val (rc, out) = runRootCommand(script, 10)
-        out.lines().filter { it.isNotBlank() }.forEach { addLog("MOD: $it") }
-        if (rc != 0) addLog("Module toggle warning rc=$rc")
+    /** Shell-owned observer survives the framework restart that kills this Activity. */
+    private fun restartHandoff(action: String, arm: Boolean = false): Pair<Int, String> {
+        val base = "/data/local/tmp/shark-restart-handoff-${android.os.Process.myUid()}"
+        val install = if (arm) {
+            val controller = assets.open("restart_guard.sh").bufferedReader().use { it.readText() }
+            val observer = assets.open("restart_handoff.sh").bufferedReader().use { it.readText() }
+            """
+                umask 077
+                mkdir -p '$base' || exit 70
+                chmod 700 '$base' || exit 70
+                printf '%s' ${shellQuote(controller)} > '$base/controller.sh.new' || exit 70
+                mv '$base/controller.sh.new' '$base/controller.sh' || exit 70
+                printf '%s' ${shellQuote(observer)} > '$base/handoff.sh.new' || exit 70
+                mv '$base/handoff.sh.new' '$base/handoff.sh' || exit 70
+            """.trimIndent()
+        } else ""
+        val token = java.util.UUID.randomUUID().toString()
+        val args = if (arm) {
+            "${if (secondSoftReboot) 1 else 0} ${softRebootDelayMin.coerceIn(0, 3)} $token"
+        } else action.substringAfter(' ', "")
+        val verb = action.substringBefore(' ')
+        val command = "$install\n[ -f '$base/handoff.sh' ] || exit 0\n" +
+            "/system/bin/timeout 10 sh '$base/handoff.sh' $verb '$base' $args"
+        return runCatching {
+            val p = PrivService.newProcess(arrayOf("sh", "-c", command), shizukuEnv(), "/")
+            // Output is small, and both streams must be drained before waitFor.
+            val error = StringBuilder()
+            val reader = Thread {
+                runCatching { error.append(p.getErrorStream().bufferedReader().readText()) }
+            }.apply { isDaemon = true; start() }
+            val output = p.getInputStream().bufferedReader().readText()
+            val rc = p.waitFor()
+            reader.join(1000)
+            if (arm && rc == 0) {
+                val boot = output.lineSequence().firstOrNull { it.startsWith("BOOT_ID=") }?.substringAfter('=')
+                    ?: return -1 to "Restart observer did not return its boot ID; manual root remains available."
+                if (!getSharedPreferences("restart_handoff", MODE_PRIVATE).edit()
+                    .putString("token", token).putString("boot", boot).putBoolean("claimed", false)
+                    .putBoolean("second", secondSoftReboot).putInt("delay", softRebootDelayMin).commit()) {
+                    return -1 to "Could not save restart continuation; manual root remains available."
+                }
+            }
+            rc to (output + error).trim()
+        }.getOrElse { -1 to (it.message ?: "Restart handoff unavailable") }
     }
 
-    private fun scheduleSecondSoftReboot(delayMin: Int): Int = runCatching {
-        val delaySeconds = if (delayMin > 0) delayMin * 60 else 12
-        val script = """
-            (
-                sleep $delaySeconds
-                MODDIR=/data/adb/modules
-                if [ -d "${'$'}MODDIR" ]; then
-                    find "${'$'}MODDIR" -mindepth 2 -maxdepth 2 -name disable -delete 2>/dev/null
-                    newest=${'$'}(ls -1td "${'$'}MODDIR"/*/ 2>/dev/null | head -n 1)
-                    if [ -n "${'$'}newest" ] && [ -d "${'$'}newest" ]; then
-                        touch "${'$'}newest/disable"
-                        rm -f "${'$'}newest/disable"
-                    fi
-                fi
-                setprop ctl.restart zygote
-            ) >/dev/null 2>&1 &
-        """.trimIndent()
-        PrivService.newProcess(arrayOf("su", "-c", script), shizukuEnv(), "/").waitFor()
-    }.getOrDefault(-1)
+    @Synchronized
+    private fun restartController(action: String): Pair<Int, String> {
+        val script = assets.open("restart_guard.sh").bufferedReader().use { it.readText() }
+        val quoted = "'" + script.replace("'", "'\"'\"'") + "'"
+        return runRootCommand("""
+            umask 077
+            mkdir -p /data/adb/shark-restart-guard || exit 70
+            printf '%s' $quoted > /data/adb/shark-restart-guard/controller.sh.new || exit 70
+            chmod 700 /data/adb/shark-restart-guard/controller.sh.new || exit 70
+            mv /data/adb/shark-restart-guard/controller.sh.new /data/adb/shark-restart-guard/controller.sh || exit 70
+            sh /data/adb/shark-restart-guard/controller.sh $action
+        """.trimIndent(), 10)
+    }
 
-    private fun maybeSecondSoftReboot() {
-        val prefs = getSharedPreferences("pyb110", MODE_PRIVATE)
-        if (!prefs.getBoolean("pending_zygisk_reboot", false)) return
-        if (prefs.getBoolean("second_reboot_scheduled", false)) return
-        if (prefs.contains("second_soft_reboot") &&
-            !prefs.getBoolean("second_soft_reboot", false)
-        ) {
-            prefs.edit().remove("pending_zygisk_reboot").apply()
-            return
-        }
+    private fun showRestartStatus() {
         lifecycleScope.launch(Dispatchers.IO) {
-            // Same module toggle + soft reboot, once the app is back after the first one
-            repeat(10) { attempt ->
-                kotlinx.coroutines.delay(if (attempt == 0) 2000 else 3000)
-                if (!prefs.getBoolean("pending_zygisk_reboot", false)) return@launch
-                val (active, _) = readDeviceState()
-                if (!active) return@repeat
-                addLog("Second pass: module toggle + soft reboot for Zygisk")
-                toggleModulesForZygisk()
-                val rc = doSoftReboot()
-                if (rc == 0) {
-                    prefs.edit().putBoolean("pending_zygisk_reboot", false).commit()
-                    addLog("Second soft reboot initiated")
-                    // Circuit breaker only after modules have had a chance to activate
-                    circuitBreakerDisableRecentModules()
-                    return@launch
-                } else {
-                    addLog("Second soft reboot failed rc=$rc (attempt ${attempt + 1})")
-                }
+            val (rc, controllerOutput) = restartController("status")
+            val (_, handoffOutput) = restartHandoff("status")
+            val appOutput = runCatching { File(filesDir, "restart-handoff-result.txt").readText() }.getOrDefault("")
+            val savedStage = runCatching { File(filesDir, "restart-controller-status.txt").readText() }.getOrDefault("")
+            val output = listOf(handoffOutput, appOutput, savedStage, controllerOutput).filter { it.isNotBlank() }.joinToString("\n\n")
+            addLog("Restart status ($rc): $output")
+            withContext(Dispatchers.Main) {
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Restart status")
+                    .setMessage(output.ifBlank { "Status unavailable (code $rc)." })
+                    .setPositiveButton("Close", null).show()
             }
         }
     }
 
-    private fun circuitBreakerDisableRecentModules() {
-        addLog("Circuit breaker: checking for boot-loop risk...")
-        // Use ${'$'} so Kotlin does not treat shell variables as templates
-        val script = """
-            MODDIR=/data/adb/modules
-            if [ ! -d "${'$'}MODDIR" ]; then
-                echo "No modules directory"
-                exit 0
-            fi
-            REBOOTS=${'$'}(getprop persist.sys.boot_count 2>/dev/null || echo 0)
-            MARKER=/data/adb/.shark_boot_ok
-            if [ "${'$'}REBOOTS" -le 2 ] && [ -f "${'$'}MARKER" ]; then
-                echo "No boot-loop risk. Modules left untouched."
-                exit 0
-            fi
-            echo "Boot-loop risk detected (reboots=${'$'}REBOOTS). Disabling newest modules only."
-            ls -1td "${'$'}MODDIR"/*/ 2>/dev/null | head -n 2 | while read -r dir; do
-                [ -d "${'$'}dir" ] || continue
-                name=${'$'}(basename "${'$'}dir")
-                if [ ! -f "${'$'}dir/disable" ]; then
-                    touch "${'$'}dir/disable"
-                    echo "Disabled module: ${'$'}name"
-                else
-                    echo "Already disabled: ${'$'}name"
-                fi
-            done
-            rm -f "${'$'}MARKER"
-        """.trimIndent()
-        val (rc, out) = runRootCommand(script, 15)
-        out.lines().filter { it.isNotBlank() }.forEach { addLog("CB: $it") }
-        if (rc != 0) addLog("Circuit breaker warning rc=$rc")
+    private fun confirmRestartReset() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Acknowledge restart safety hold?")
+            .setMessage("First review faulty modules in your Manager. This only allows a new restart attempt; it does not enable modules, obtain root, or restart the phone. An active attempt cannot be reset.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Acknowledge") { _, _ ->
+                lifecycleScope.launch(Dispatchers.IO) {
+                    val (handoffRc, handoffOutput) = restartHandoff("reset")
+                    val (rc, output) = if (handoffRc == 0) restartController("reset") else handoffRc to handoffOutput
+                    addLog("Restart safety hold ($rc): $output")
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, output.ifBlank { "Result: $rc" }, Toast.LENGTH_LONG).show()
+                    }
+                }
+            }.show()
     }
 
-    private fun runFlow() {
+    private fun runFlow(automatic: Boolean = false) {
+        if (busy) return
         busy = true
         val softReboot = softRebootAfter
         val startedAt = System.currentTimeMillis()
@@ -2606,6 +2616,17 @@ class MainActivity : ComponentActivity() {
                     return@launch
                 }
                 val (alreadyActive, _) = readDeviceState()
+                if (automatic && alreadyActive) {
+                    addLog("Automatic startup found existing root; skipping the native root command.")
+                    if (softReboot) {
+                        val (armRc, armOutput) = restartHandoff("arm", arm = true)
+                        addLog("Existing-root restart handoff ($armRc): $armOutput")
+                        if (armRc == 0) restartHandoff("result 0")
+                    } else BootAutomation.physicalBoot()?.let { BootAutomation.receipt(this@MainActivity).writeText(it) }
+                    success = true
+                    exit = 0
+                    return@launch
+                }
                 val ksudPreflight = PrivService.newProcess(
                     arrayOf("sh", "-c",
                         "[ -n \"$(pm path '${manager.pkg}' 2>/dev/null)\" ] || [ -x /data/adb/ksu/bin/ksud ] || [ -x /data/adb/ksud ]"),
@@ -2636,79 +2657,41 @@ class MainActivity : ComponentActivity() {
                     }
                     return@launch
                 }
+                var handoffArmed = false
+                if (softReboot) {
+                    val (armRc, armOutput) = runCatching { restartHandoff("arm", arm = true) }
+                        .getOrElse { -1 to (it.message ?: "Restart observer unavailable") }
+                    handoffArmed = armRc == 0
+                    addLog("Restart handoff ($armRc): $armOutput")
+                    if (armRc != 0) {
+                        addLog("Automatic restarts unavailable: $armOutput. Continuing the original manual root command.")
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@MainActivity, "Restart automation unavailable. Continuing root; see Restart status.", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
                 val rc = runStreaming(cmd, nativeDir)
+                if (handoffArmed) {
+                    val (handoffRc, output) = restartHandoff("result $rc")
+                    addLog("Root process result handed to restart observer ($handoffRc): $output")
+                }
                 exit = rc
                 addLog("exploit exit=$rc")
                 val (active, se) = readDeviceState()
                 success = rc == 0 && active
+                if (automatic && success && !softReboot) BootAutomation.physicalBoot()?.let {
+                    BootAutomation.receipt(this@MainActivity).writeText(it)
+                }
                 withContext(Dispatchers.Main) {
                     ksuActive = active
                     selinuxText = se
                 }
                 addLog(if (active) "KernelSU module loaded" else "KernelSU module not loaded")
-                if (success) {
-                    val rescueScript = """
-                        #!/system/bin/sh
-                        if [ -f /data/adb/shark_boot_flag ]; then
-                            for dir in /data/adb/modules/* /data/adb/ksu/modules/* /data/adb/ap/modules/*; do
-                                if [ -d "${'$'}dir" ]; then
-                                    touch "${'$'}dir/disable"
-                                fi
-                            done
-                            rm -f /data/adb/shark_boot_flag
-                        fi
-                    """.trimIndent()
-                    PrivService.newProcess(
-                        arrayOf(
-                            "su", "-c",
-                            "echo '$rescueScript' > /data/adb/post-fs-data.d/shark_rescue.sh && chmod 755 /data/adb/post-fs-data.d/shark_rescue.sh"
-                        ),
-                        shizukuEnv(), "/"
-                    ).waitFor()
-                }
                 if (active && !softReboot) {
                     withContext(Dispatchers.Main) { launchManager() }
                 }
-                if (softReboot && rc == 0 && active) {
-                    val delayMin = softRebootDelayMin
-                    addLog("Jailbreak complete; module toggle + soft reboot 1/2")
-                    getSharedPreferences("pyb110", MODE_PRIVATE)
-                        .edit()
-                        .putBoolean("pending_zygisk_reboot", secondSoftReboot)
-                        .apply()
-                    toggleModulesForZygisk()
-                    softRebootJob?.cancel()
-                    softRebootJob = lifecycleScope.launch(Dispatchers.IO) {
-                        if (secondSoftReboot) {
-                            val scheduleRc = scheduleSecondSoftReboot(delayMin)
-                            if (scheduleRc == 0) {
-                                getSharedPreferences("pyb110", MODE_PRIVATE)
-                                    .edit()
-                                    .putBoolean("pending_zygisk_reboot", false)
-                                    .putBoolean("second_reboot_scheduled", true)
-                                    .apply()
-                                val secondDelay = if (delayMin > 0) {
-                                    softRebootDelayLabel(delayMin)
-                                } else {
-                                    "12 seconds"
-                                }
-                                addLog("Second soft reboot scheduled $secondDelay")
-                            } else {
-                                addLog("Second soft reboot scheduling failed rc=$scheduleRc")
-                            }
-                        }
-                        PrivService.newProcess(
-                            arrayOf("su", "-c", "touch /data/adb/shark_boot_flag"),
-                            shizukuEnv(), "/"
-                        ).waitFor()
-                        val firstRc = doSoftReboot()
-                        if (firstRc != 0) addLog("First soft reboot failed rc=$firstRc")
-                        else addLog("First soft reboot initiated")
-                    }
-                    // Circuit breaker waits until after the second soft reboot
-                } else if (rc == 0 && active) {
-                    // Mark a clean successful boot so the circuit breaker stays quiet next time
-                    runRootCommand("touch /data/adb/.shark_boot_ok", 5)
+                if (handoffArmed && rc == 0 && active) {
+                    addLog("Root is active; the independent restart observer owns the remaining sequence. Check Restart status for completion.")
                 }
             } catch (t: Throwable) {
                 addLog("ERROR: $t")
@@ -2847,3 +2830,4 @@ class MainActivity : ComponentActivity() {
         )
     }
 }
+

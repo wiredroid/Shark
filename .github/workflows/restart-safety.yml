@@ -1,0 +1,40 @@
+name: Restart safety validation
+
+on:
+  push:
+    branches: [fix/restart-module-safety]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test restart boundaries without a device
+        run: |
+          python3 tests/test_restart_guard.py
+          python3 tests/test_restart_handoff.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK packages (same bootstrap as release workflow)
+        run: |
+          sdkmanager_path="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}" -name sdkmanager -type f | head -1)"
+          test -x "$sdkmanager_path"
+          yes | "$sdkmanager_path" --licenses >/dev/null || true
+          "$sdkmanager_path" 'platforms;android-36' 'build-tools;36.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build release for persistent local signing
+        working-directory: app
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest :app:assembleRelease --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shark-2.2.10-unsigned-for-local-signing
+          path: app/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error

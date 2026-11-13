@@ -27,15 +27,14 @@ data class UpdateInfo(
 
 sealed interface UpdateCheckResult {
     data class Available(val info: UpdateInfo) : UpdateCheckResult
+    data object NoPublishedRelease : UpdateCheckResult
     data object UpToDate : UpdateCheckResult
     data object Failed : UpdateCheckResult
 }
 
 object UpdateChecker {
-    private const val GITEE_API =
-        "https://gitee.com/api/v5/repos/puci1/Shark/releases/latest"
     private const val GITHUB_API =
-        "https://api.github.com/repos/Yunnijian/Shark/releases/latest"
+        "https://api.github.com/repos/wiredroid/Shark/releases/latest"
     private const val USER_AGENT = "Shark-Updater"
 
     suspend fun check(context: Context): UpdateCheckResult = withContext(Dispatchers.IO) {
@@ -44,34 +43,27 @@ object UpdateChecker {
             .versionName
             ?: return@withContext UpdateCheckResult.Failed
         val currentParts = parseVersion(current)
-        var fetched = false
-
-        val gitee = runCatching { fetch(GITEE_API, "Gitee", true) }.getOrNull()
-        if (gitee != null) {
-            fetched = true
-            if (compareVersion(parseVersion(gitee.version), currentParts) > 0) {
-                return@withContext UpdateCheckResult.Available(gitee)
-            }
+        try {
+            val release = fetch() ?: return@withContext UpdateCheckResult.NoPublishedRelease
+            if (compareVersion(parseVersion(release.version), currentParts) > 0) {
+                UpdateCheckResult.Available(release)
+            } else UpdateCheckResult.UpToDate
+        } catch (_: Exception) {
+            UpdateCheckResult.Failed
         }
-
-        val github = runCatching { fetch(GITHUB_API, "GitHub", false) }.getOrNull()
-        if (github != null) {
-            fetched = true
-            if (compareVersion(parseVersion(github.version), currentParts) > 0) {
-                return@withContext UpdateCheckResult.Available(github)
-            }
-        }
-        if (fetched) UpdateCheckResult.UpToDate else UpdateCheckResult.Failed
     }
 
-    private fun fetch(api: String, source: String, gitee: Boolean): UpdateInfo? {
-        val conn = (URL(api).openConnection() as HttpURLConnection).apply {
+    private fun fetch(): UpdateInfo? {
+        val conn = (URL(GITHUB_API).openConnection() as HttpURLConnection).apply {
             connectTimeout = 5000
             readTimeout = 10000
             setRequestProperty("User-Agent", USER_AGENT)
-            if (!gitee) setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("Accept", "application/vnd.github+json")
         }
-        val body = conn.inputStream.bufferedReader().use { it.readText() }
+        val body = try {
+            if (conn.responseCode == HttpURLConnection.HTTP_NOT_FOUND) return null
+            conn.inputStream.bufferedReader().use { it.readText() }
+        } finally { conn.disconnect() }
         val json = JSONObject(body)
         if (json.optBoolean("prerelease", false)) return null
 
@@ -81,13 +73,12 @@ object UpdateChecker {
 
         var apk: UpdateAsset? = null
         var shaAsset: UpdateAsset? = null
-        val assets = json.optJSONArray("assets") ?: json.optJSONArray("attach_files")
+        val assets = json.optJSONArray("assets")
         if (assets != null) {
             for (i in 0 until assets.length()) {
                 val item = assets.optJSONObject(i) ?: continue
-                val name = item.optString("name").ifBlank { item.optString("file_name") }
+                val name = item.optString("name")
                 val url = item.optString("browser_download_url")
-                    .ifBlank { item.optString("download_url") }
                 if (url.isBlank()) continue
                 val asset = UpdateAsset(name, url, item.optLong("size", 0L))
                 if (apk == null && name.endsWith(".apk", ignoreCase = true)) apk = asset
@@ -106,16 +97,17 @@ object UpdateChecker {
             ?.let(::extractSha256)
             ?: extractSha256(releaseBody)
         val pageUrl = json.optString("html_url").ifBlank {
-            if (gitee) "https://gitee.com/puci1/Shark/releases"
-            else "https://github.com/Yunnijian/Shark/releases/tag/$tag"
+            "https://github.com/wiredroid/Shark/releases/tag/$tag"
         }
         return UpdateInfo(
             version = version,
-            changelog = releaseBody,
+            changelog = if (releaseBody.any { it in '\u3400'..'\u9fff' }) {
+                "A new Shark release is available from wiredroid/Shark. Open the release page for the full release notes."
+            } else releaseBody,
             pageUrl = pageUrl,
             apk = apkAsset,
             sha256 = expectedSha,
-            source = source,
+            source = "GitHub · wiredroid/Shark",
         )
     }
 
@@ -201,7 +193,7 @@ object UpdateChecker {
     }
 
     private fun extractSha256(text: String): String? =
-        Regex("(?i)sha-?256\\s*[:：=]?\\s*([0-9a-f]{64})")
+        Regex("(?i)sha-?256\\s*[:ï¼š=]?\\s*([0-9a-f]{64})")
             .find(text)
             ?.groupValues
             ?.getOrNull(1)
@@ -219,3 +211,4 @@ object UpdateChecker {
         return 0
     }
 }
+
