@@ -72,7 +72,8 @@ case "$1" in
         ;;
     status)
         if [ -d "$state" ]; then
-            printf 'Restart sequence: %s\n' "$(phase)"
+            printf 'Restart sequence: %s (boot %s)\n' "$(phase)" "$(cat "$state/boot")"
+            same_boot || echo 'This result belongs to an earlier physical boot.'
             cat "$state/reason" 2>/dev/null
         else echo 'No restart sequence recorded.'; fi
         exit 0
@@ -92,6 +93,8 @@ case "$1" in
         ;;
     launch)
         case "$2:$3" in 0:0|0:1|0:2|0:3|1:0|1:1|1:2|1:3) ;; *) exit 78;; esac
+        observed=${4:-0}
+        case "$observed" in 0|1) ;; *) exit 78;; esac
         mkdir "$control" 2>/dev/null || { echo 'Another request is in progress.'; exit 75; }
         trap 'rmdir "$control"' EXIT
         if [ -d "$state" ]; then
@@ -123,6 +126,7 @@ case "$1" in
         fi
         printf '%s\n' "$2" > "$state/second" || exit 74
         printf '%s\n' "$3" > "$state/delay" || exit 74
+        printf '%s\n' "$observed" > "$state/first_observed" || exit 74
         put_phase queued || exit 74
         nohup setsid sh "$SELF" run </dev/null >>"$state/log" 2>&1 &
         echo 'Restart sequence queued. Unlock after each restart; disabled modules are preserved.'
@@ -133,7 +137,17 @@ case "$1" in
         same_boot || pause 'Attempt belongs to a different physical boot.'
         [ "$(phase)" = queued ] || pause 'Refusing to replay an interrupted stage.'
         sleep 2
-        restart_once first_requested
+        observed=$(cat "$state/first_observed" 2>/dev/null)
+        case "$observed" in
+            1)
+                # The authorized handoff witnessed the first restart while the
+                # Activity was dying. Do not turn two requested restarts into three.
+                ready || pause 'Observed first restart is no longer healthy.'
+                echo 'First framework restart was observed before handoff.'
+                ;;
+            ''|0) restart_once first_requested;;
+            *) pause 'Invalid first-restart observation.';;
+        esac
         put_phase first_verified || exit 74
         if [ "$(cat "$state/second")" = 1 ]; then
             delay=$(cat "$state/delay")
@@ -146,4 +160,3 @@ case "$1" in
         ;;
     *) exit 86;;
 esac
-

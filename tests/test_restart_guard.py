@@ -64,6 +64,16 @@ esac
         self.assertEqual(self.run_guard('run').returncode,0)
         self.assertEqual(self.count(),2)
         self.assertEqual(self.phase(),'complete')
+    def test_first_already_observed_runs_only_the_second(self):
+        (self.attempt/'first_observed').write_text('1')
+        self.assertEqual(self.run_guard('run').returncode,0)
+        self.assertEqual(self.count(),1)
+        self.assertEqual(self.phase(),'complete')
+    def test_first_observed_and_second_disabled_never_restarts(self):
+        (self.attempt/'first_observed').write_text('1')
+        (self.attempt/'second').write_text('0')
+        self.assertEqual(self.run_guard('run').returncode,0)
+        self.assertEqual(self.count(),0)
     def test_one_restart_when_second_disabled(self):
         (self.attempt/'second').write_text('0')
         self.assertEqual(self.run_guard('run').returncode,0)
@@ -152,4 +162,3 @@ esac
         self.assertEqual(self.count(),0)
 
 if __name__ == '__main__': unittest.main(verbosity=2)
-

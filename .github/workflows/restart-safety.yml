@@ -14,7 +14,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Test restart boundaries without a device
-        run: python3 tests/test_restart_guard.py
+        run: |
+          python3 tests/test_restart_guard.py
+          python3 tests/test_restart_handoff.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -26,43 +28,13 @@ jobs:
           yes | "$sdkmanager_path" --licenses >/dev/null || true
           "$sdkmanager_path" 'platforms;android-36' 'build-tools;36.0.0'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Create temporary release signing key
-        working-directory: app
-        run: |
-          mkdir -p keystore
-          keytool -genkeypair \
-            -keystore keystore/release.jks \
-            -storepass android \
-            -keypass android \
-            -alias shark-release \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Shark Release, OU=Build, O=Shark, L=Unknown, ST=Unknown, C=US"
-          cat > keystore.properties <<'EOF'
-          storeFile=keystore/release.jks
-          storePassword=android
-          keyAlias=shark-release
-          keyPassword=android
-          EOF
-
-      - name: Build signed release APK
+      - name: Build release for persistent local signing
         working-directory: app
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleRelease --no-daemon
-      - name: Verify APK signature and record checksum
-        working-directory: app
-        run: |
-          apk="$(find app/build/outputs/apk/release -name '*.apk' -type f | head -1)"
-          test -n "$apk"
-          "${ANDROID_HOME}/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$apk" | tee app/build/outputs/apk/release/SIGNATURE.txt
-          sha256sum "$apk" > app/build/outputs/apk/release/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: shark-2.2.4-signed-apk
-          path: |
-            app/app/build/outputs/apk/release/*.apk
-            app/app/build/outputs/apk/release/SIGNATURE.txt
-            app/app/build/outputs/apk/release/SHA256SUMS.txt
+          name: shark-2.2.5-unsigned-for-local-signing
+          path: app/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
