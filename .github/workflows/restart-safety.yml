@@ -1,0 +1,35 @@
+name: Restart safety validation
+
+on:
+  push:
+    branches: [fix/restart-module-safety]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test restart boundaries without a device
+        run: python3 tests/test_restart_guard.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install matching Android SDK
+        run: sdkmanager 'platforms;android-37' 'build-tools;37.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile release without inventing a signing identity
+        working-directory: app
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shark-2.2.4-unsigned-validation-apk
+          path: app/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
