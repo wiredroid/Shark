@@ -18,7 +18,7 @@ class HandoffTest(unittest.TestCase):
         self.base = self.root/'handoff'
         self.state = self.base/'attempt'
         self.state.mkdir(parents=True)
-        for name,value in {'boot':'boot-a','before':'100','second':'1','delay':'0','phase':'waiting','daemon':'/no/daemon'}.items():
+        for name,value in {'boot':'boot-a','before':'100','second':'1','delay':'0','phase':'waiting','token':'test-token'}.items():
             (self.state/name).write_text(value+'\n')
         (self.root/'boot').write_text('boot-a\n')
         (self.root/'pid').write_text('101\n')
@@ -28,7 +28,12 @@ class HandoffTest(unittest.TestCase):
 case "${0##*/}" in
  pidof) cat "$FIXTURE/pid";;
  getprop) case "$1" in init.svc.zygote) echo running;; *) echo 1;; esac;;
- am) echo "${USER_STATE:-RUNNING_UNLOCKED}";;
+ am)
+   if [ "$1" = broadcast ]; then
+     echo "$*" >> "$FIXTURE/requests"
+     [ "$FAIL_BROADCAST" = 1 ] && exit 3
+     exit 0
+   else echo "${USER_STATE:-RUNNING_UNLOCKED}"; fi;;
  su)
    [ "$DENY_ROOT" = 1 ] && exit 1
    if [ "$2" = 'id -u' ]; then echo 0; else sh -c "$2"; fi;;
@@ -58,15 +63,21 @@ esac
         # No Activity exists and no result callback is delivered. Changed PID is enough.
         r=self.run_handoff('watch')
         self.assertEqual(r.returncode,0,r.stdout+r.stderr)
-        self.assertEqual(self.requests(),['launch 1 0 1'])
+        self.assertEqual(len(self.requests()),1)
+        self.assertTrue(self.requests()[0].endswith('--es token test-token --es boot boot-a --ez first_observed true'))
     def test_normal_exit_before_any_restart_requests_both(self):
         (self.root/'pid').write_text('100\n')
         (self.state/'result').write_text('0\n')
         self.assertEqual(self.run_handoff('watch').returncode,0)
-        self.assertEqual(self.requests(),['launch 1 0 0'])
-    def test_no_root_never_hands_off(self):
-        self.assertNotEqual(self.run_handoff('watch',DENY_ROOT='1').returncode,0)
-        self.assertEqual(self.requests(),[])
+        self.assertEqual(len(self.requests()),1)
+        self.assertTrue(self.requests()[0].endswith('--ez first_observed false'))
+    def test_shell_root_not_required_for_app_handoff(self):
+        self.assertEqual(self.run_handoff('watch',DENY_ROOT='1').returncode,0)
+        self.assertEqual(len(self.requests()),1)
+    def test_failed_broadcast_is_not_replayed(self):
+        self.assertNotEqual(self.run_handoff('watch',FAIL_BROADCAST='1').returncode,0)
+        self.assertNotEqual(self.run_handoff('watch').returncode,0)
+        self.assertEqual(len(self.requests()),1)
     def test_failed_native_result_never_hands_off(self):
         (self.state/'result').write_text('1\n')
         self.assertNotEqual(self.run_handoff('watch').returncode,0)
@@ -87,9 +98,9 @@ esac
         self.run_handoff('watch')
         self.assertNotEqual(self.run_handoff('watch').returncode,0)
         self.assertEqual(len(self.requests()),1)
-    def test_unfinished_previous_boot_requires_review(self):
+    def test_new_physical_boot_can_arm_a_fresh_manual_attempt(self):
         (self.root/'boot').write_text('boot-b\n')
-        self.assertEqual(self.run_handoff('arm','1','0','/no/daemon').returncode,94)
+        self.assertEqual(self.run_handoff('arm','1','0','test-token').returncode,0)
     def test_locked_owner_prevents_handoff(self):
         self.assertNotEqual(self.run_handoff('watch',USER_STATE='RUNNING_LOCKED').returncode,0)
         self.assertEqual(self.requests(),[])

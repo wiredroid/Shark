@@ -336,7 +336,7 @@ class MainActivity : ComponentActivity() {
 
     private fun checkForUpdatesManually() {
         if (updateDownloading) return
-        Toast.makeText(this, "Checking for updates…", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Checking for updatesâ€¦", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             when (val result = runCatching {
                 UpdateChecker.check(applicationContext)
@@ -852,7 +852,7 @@ class MainActivity : ComponentActivity() {
             ) {
                 when {
                     droidspacesLoading -> Text(
-                        text = "Fetching latest release…",
+                        text = "Fetching latest releaseâ€¦",
                         kind = CouiTextKind.Body,
                         color = scheme.onSurfaceVariant,
                         textAlign = TextAlign.Start
@@ -872,7 +872,7 @@ class MainActivity : ComponentActivity() {
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = "${release.assetName} · ${formatSize(release.assetSize)}",
+                            text = "${release.assetName} Â· ${formatSize(release.assetSize)}",
                             kind = CouiTextKind.PreferenceSummary,
                             color = scheme.onSurfaceVariant,
                             textAlign = TextAlign.Start
@@ -900,7 +900,7 @@ class MainActivity : ComponentActivity() {
                             }
                             Spacer(Modifier.height(8.dp))
                             Text(
-                                text = "Go to KernelSU Manager → Modules → Install and select this file.",
+                                text = "Go to KernelSU Manager â†’ Modules â†’ Install and select this file.",
                                 kind = CouiTextKind.Body,
                                 color = scheme.onSurface,
                                 textAlign = TextAlign.Start
@@ -1020,7 +1020,7 @@ class MainActivity : ComponentActivity() {
                     .padding(horizontal = CouiDialogDefaults.contentPadding)
             ) {
                 Text(
-                    text = "Current ${BuildConfig.VERSION_NAME}  ·  Source ${info.source}",
+                    text = "Current ${BuildConfig.VERSION_NAME}  Â·  Source ${info.source}",
                     kind = CouiTextKind.PreferenceSummary,
                     color = scheme.onSurfaceVariant,
                     textAlign = TextAlign.Start
@@ -1285,7 +1285,7 @@ class MainActivity : ComponentActivity() {
     private fun PrimaryActionCard() {
         val colors = CouiPageDefaults.themeColors()
         val label = when {
-            busy -> "Running…"
+            busy -> "Runningâ€¦"
             !binderReady -> "Stellar not running (tap to open)"
             !authorized -> "Authorize Shizuku"
             ksuActive -> "Verify / Jailbreak Again"
@@ -2485,11 +2485,9 @@ class MainActivity : ComponentActivity() {
                 mv '$base/handoff.sh.new' '$base/handoff.sh' || exit 70
             """.trimIndent()
         } else ""
+        val token = java.util.UUID.randomUUID().toString()
         val args = if (arm) {
-            val selected = if (manager == ManagerKind.DYNAMIC) ManagerKind.KERNELSU else manager
-            val info = packageManager.getApplicationInfo(selected.pkg, 0)
-            "${if (secondSoftReboot) 1 else 0} ${softRebootDelayMin.coerceIn(0, 3)} " +
-                shellQuote("${info.nativeLibraryDir}/libksud.so")
+            "${if (secondSoftReboot) 1 else 0} ${softRebootDelayMin.coerceIn(0, 3)} $token"
         } else action.substringAfter(' ', "")
         val verb = action.substringBefore(' ')
         val command = "$install\n[ -f '$base/handoff.sh' ] || exit 0\n" +
@@ -2504,6 +2502,15 @@ class MainActivity : ComponentActivity() {
             val output = p.getInputStream().bufferedReader().readText()
             val rc = p.waitFor()
             reader.join(1000)
+            if (arm && rc == 0) {
+                val boot = output.lineSequence().firstOrNull { it.startsWith("BOOT_ID=") }?.substringAfter('=')
+                    ?: return -1 to "Restart observer did not return its boot ID; manual root remains available."
+                if (!getSharedPreferences("restart_handoff", MODE_PRIVATE).edit()
+                    .putString("token", token).putString("boot", boot).putBoolean("claimed", false)
+                    .putBoolean("second", secondSoftReboot).putInt("delay", softRebootDelayMin).commit()) {
+                    return -1 to "Could not save restart continuation; manual root remains available."
+                }
+            }
             rc to (output + error).trim()
         }.getOrElse { -1 to (it.message ?: "Restart handoff unavailable") }
     }
@@ -2526,7 +2533,8 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             val (rc, controllerOutput) = restartController("status")
             val (_, handoffOutput) = restartHandoff("status")
-            val output = listOf(handoffOutput, controllerOutput).filter { it.isNotBlank() }.joinToString("\n\n")
+            val appOutput = runCatching { File(filesDir, "restart-handoff-result.txt").readText() }.getOrDefault("")
+            val output = listOf(handoffOutput, appOutput, controllerOutput).filter { it.isNotBlank() }.joinToString("\n\n")
             addLog("Restart status ($rc): $output")
             withContext(Dispatchers.Main) {
                 android.app.AlertDialog.Builder(this@MainActivity)
@@ -2608,16 +2616,21 @@ class MainActivity : ComponentActivity() {
                     }
                     return@launch
                 }
+                var handoffArmed = false
                 if (softReboot) {
-                    val (armRc, armOutput) = restartHandoff("arm", arm = true)
+                    val (armRc, armOutput) = runCatching { restartHandoff("arm", arm = true) }
+                        .getOrElse { -1 to (it.message ?: "Restart observer unavailable") }
+                    handoffArmed = armRc == 0
                     addLog("Restart handoff ($armRc): $armOutput")
                     if (armRc != 0) {
-                        addLog("Root was not started because its restart handoff could not be armed. Review Restart status.")
-                        return@launch
+                        addLog("Automatic restarts unavailable: $armOutput. Continuing the original manual root command.")
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@MainActivity, "Restart automation unavailable. Continuing root; see Restart status.", Toast.LENGTH_LONG).show()
+                        }
                     }
                 }
                 val rc = runStreaming(cmd, nativeDir)
-                if (softReboot) {
+                if (handoffArmed) {
                     val (handoffRc, output) = restartHandoff("result $rc")
                     addLog("Root process result handed to restart observer ($handoffRc): $output")
                 }
@@ -2633,7 +2646,7 @@ class MainActivity : ComponentActivity() {
                 if (active && !softReboot) {
                     withContext(Dispatchers.Main) { launchManager() }
                 }
-                if (softReboot && rc == 0 && active) {
+                if (handoffArmed && rc == 0 && active) {
                     addLog("Root is active; the independent restart observer owns the remaining sequence. Check Restart status for completion.")
                 }
             } catch (t: Throwable) {
