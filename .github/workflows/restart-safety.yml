@@ -19,12 +19,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install matching Android SDK
+      - name: Install Android SDK packages (same bootstrap as release workflow)
         run: |
           sdkmanager_path="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}" -name sdkmanager -type f | head -1)"
           test -x "$sdkmanager_path"
           yes | "$sdkmanager_path" --licenses >/dev/null || true
-          "$sdkmanager_path" 'platforms;android-37' 'build-tools;37.0.0'
+          "$sdkmanager_path" 'platforms;android-36' 'build-tools;36.0.0'
       - uses: gradle/actions/setup-gradle@v4
       - name: Compile release without inventing a signing identity
         working-directory: app
