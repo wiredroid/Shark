@@ -60,7 +60,10 @@ restart_once() {
     [ -n "$old" ] || pause 'Zygote not running.'
     ready || pause 'Android is not ready or owner is locked.'
     put_phase "$1" || exit 74
-    setprop ctl.restart zygote || pause 'Framework restart request failed.'
+    # Use the Manager's operation so enabled modules receive their boot stages.
+    # Restarting Zygote alone does not initialize the module runtime.
+    [ -x /data/adb/ksud ] || pause 'KernelSU daemon unavailable. No restart requested.'
+    /data/adb/ksud soft-reboot || pause 'KernelSU soft reboot request failed.'
     wait_ready "$old"
 }
 case "$1" in

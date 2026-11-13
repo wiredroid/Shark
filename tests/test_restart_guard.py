@@ -32,8 +32,9 @@ case "${0##*/}" in
  am)
    if [ "$LOCK_AFTER_ONE" = 1 ] && [ -f "$FIXTURE/requests" ]; then echo RUNNING_LOCKED;
    else echo "${USER_STATE:-RUNNING_UNLOCKED}"; fi;;
- setprop)
+ ksud)
    echo "$*" >> "$FIXTURE/requests"
+   [ "$1" = soft-reboot ] || exit 2
    [ "$FAIL_REQUEST" = 1 ] && exit 1
    [ "$FAIL_AT" = "$(wc -l < "$FIXTURE/requests" | tr -d ' ')" ] && exit 1
    [ "$NO_CHANGE" = 1 ] || echo $(($(cat "$FIXTURE/pid") + 1)) > "$FIXTURE/pid"
@@ -41,12 +42,13 @@ case "${0##*/}" in
  sleep|sync|nohup|setsid) exit 0;;
 esac
 '''
-        for name in ['id','pidof','getprop','am','setprop','sleep','sync','nohup','setsid']:
+        for name in ['id','pidof','getprop','am','ksud','sleep','sync','nohup','setsid']:
             (self.bin/name).write_text(stub)
             (self.bin/name).chmod(0o755)
         script = SOURCE.replace('PATH=/system/bin:/system/xbin', f'PATH="{self.posix}/bin:/usr/bin:/bin"')
         script = script.replace('BASE=/data/adb/shark-restart-guard', f'BASE="{self.posix}/state"')
         script = script.replace('BOOT_FILE=/proc/sys/kernel/random/boot_id', f'BOOT_FILE="{self.posix}/boot"')
+        script = script.replace('/data/adb/ksud', self.posix+'/bin/ksud')
         script = script.replace('LIMIT=180','LIMIT=5').replace('STABLE=15','STABLE=2')
         script = script.replace('/data/adb/post-fs-data.d/shark_rescue.sh', self.posix+'/legacy.sh').replace('/data/adb/shark_boot_flag',self.posix+'/legacy-flag')
         self.script = self.root / 'controller.sh'
@@ -63,7 +65,13 @@ esac
     def test_two_restarts(self):
         self.assertEqual(self.run_guard('run').returncode,0)
         self.assertEqual(self.count(),2)
+        self.assertEqual((self.root/'requests').read_text().splitlines(), ['soft-reboot', 'soft-reboot'])
         self.assertEqual(self.phase(),'complete')
+    def test_missing_daemon_does_not_fall_back_to_plain_zygote_restart(self):
+        (self.bin/'ksud').unlink()
+        self.assertNotEqual(self.run_guard('run').returncode,0)
+        self.assertEqual(self.count(),0)
+        self.assertEqual(self.phase(),'paused')
     def test_first_already_observed_runs_only_the_second(self):
         (self.attempt/'first_observed').write_text('1')
         self.assertEqual(self.run_guard('run').returncode,0)
