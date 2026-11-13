@@ -9,6 +9,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.UserManager
+import android.os.SystemClock
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.*
@@ -135,17 +136,27 @@ class BootAutomationService : JobService() {
         work = scope.launch {
             var retry = true
             try {
-                if (!BootAutomation.unlocked(this@BootAutomationService)) {
-                    BootAutomation.status(this@BootAutomationService, "Waiting for owner unlock")
-                } else {
-                    for (attempt in 0 until 20) {
-                        ensureActive()
-                        if (PrivService.granted()) break
-                        BootAutomation.status(this@BootAutomationService, "Waiting for authorized Shevery, Shizuku or Stellar")
-                        delay(1500)
+                val readiness = BootStartupReadiness()
+                for (sample in 0 until 100) {
+                    ensureActive()
+                    if (!BootAutomation.enabled(this@BootAutomationService)) { retry = false; break }
+                    val unlocked = BootAutomation.unlocked(this@BootAutomationService)
+                    val helper = unlocked && PrivService.granted()
+                    val bootCompleted = helper && runCatching {
+                        val (rc, out) = BootAutomation.shell("getprop sys.boot_completed")
+                        rc == 0 && out == "1"
+                    }.getOrDefault(false)
+                    if (readiness.observe(SystemClock.elapsedRealtime(), unlocked, helper, bootCompleted)) {
+                        val boot = BootAutomation.physicalBoot()
+                        if (boot != null) retry = !BootAutomation.dispatch(this@BootAutomationService, boot)
+                        break
                     }
-                    val boot = BootAutomation.physicalBoot()
-                    if (boot != null) retry = !BootAutomation.dispatch(this@BootAutomationService, boot)
+                    BootAutomation.status(this@BootAutomationService, when {
+                        !unlocked -> "Waiting for owner unlock"
+                        !helper -> "Waiting for authorized Shevery, Shizuku or Stellar"
+                        else -> "Waiting for Android and the helper to settle"
+                    })
+                    delay(2000)
                 }
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (_: Exception) {

@@ -23,6 +23,7 @@ class RestartGuardTest(unittest.TestCase):
         (self.root / 'boot').write_text('boot-a\n')
         (self.root / 'pid').write_text('100\n')
         (self.root / 'receipt').write_text('previous-boot\n')
+        (self.root / 'journal').write_text('')
         self.bin = self.root / 'bin'
         self.bin.mkdir()
         stub = '''#!/bin/sh
@@ -33,9 +34,9 @@ case "${0##*/}" in
  am)
    if [ "$LOCK_AFTER_ONE" = 1 ] && [ -f "$FIXTURE/requests" ]; then echo RUNNING_LOCKED;
    else echo "${USER_STATE:-RUNNING_UNLOCKED}"; fi;;
- ksud)
-   echo "$*" >> "$FIXTURE/requests"
-   [ "$1" = soft-reboot ] || exit 2
+ ksud|setprop)
+   echo "${0##*/} $*" >> "$FIXTURE/requests"
+   case "${0##*/}:$*" in 'ksud:soft-reboot'|'setprop:ctl.restart zygote') ;; *) exit 2;; esac
    [ "$FAIL_REQUEST" = 1 ] && exit 1
    [ "$FAIL_AT" = "$(wc -l < "$FIXTURE/requests" | tr -d ' ')" ] && exit 1
    [ "$NO_CHANGE" = 1 ] || echo $(($(cat "$FIXTURE/pid") + 1)) > "$FIXTURE/pid"
@@ -43,13 +44,14 @@ case "${0##*/}" in
  sleep|sync|nohup|setsid) exit 0;;
 esac
 '''
-        for name in ['id','pidof','getprop','am','ksud','sleep','sync','nohup','setsid']:
+        for name in ['id','pidof','getprop','am','ksud','setprop','sleep','sync','nohup','setsid']:
             (self.bin/name).write_text(stub)
             (self.bin/name).chmod(0o755)
         script = SOURCE.replace('PATH=/system/bin:/system/xbin', f'PATH="{self.posix}/bin:/usr/bin:/bin"')
         script = script.replace('BASE=/data/adb/shark-restart-guard', f'BASE="{self.posix}/state"')
         script = script.replace('BOOT_FILE=/proc/sys/kernel/random/boot_id', f'BOOT_FILE="{self.posix}/boot"')
         script = script.replace('RECEIPT=/data/user/0/com.shark.kty/files/automatic-boot-complete', f'RECEIPT="{self.posix}/receipt"')
+        script = script.replace('JOURNAL=/data/user/0/com.shark.kty/files/restart-controller-status.txt', f'JOURNAL="{self.posix}/journal"')
         script = script.replace('/data/adb/ksud', self.posix+'/bin/ksud')
         script = script.replace('LIMIT=180','LIMIT=5').replace('STABLE=15','STABLE=2')
         script = script.replace('/data/adb/post-fs-data.d/shark_rescue.sh', self.posix+'/legacy.sh').replace('/data/adb/shark_boot_flag',self.posix+'/legacy-flag')
@@ -67,7 +69,7 @@ esac
     def test_two_restarts(self):
         self.assertEqual(self.run_guard('run').returncode,0)
         self.assertEqual(self.count(),2)
-        self.assertEqual((self.root/'requests').read_text().splitlines(), ['soft-reboot', 'soft-reboot'])
+        self.assertEqual((self.root/'requests').read_text().splitlines(), ['setprop ctl.restart zygote', 'ksud soft-reboot'])
         self.assertEqual(self.phase(),'complete')
     def test_missing_daemon_does_not_fall_back_to_plain_zygote_restart(self):
         (self.bin/'ksud').unlink()
@@ -78,6 +80,7 @@ esac
         (self.attempt/'first_observed').write_text('1')
         self.assertEqual(self.run_guard('run').returncode,0)
         self.assertEqual(self.count(),1)
+        self.assertEqual((self.root/'requests').read_text().splitlines(), ['ksud soft-reboot'])
         self.assertEqual(self.phase(),'complete')
     def test_completion_receipt_is_written_after_both_restarts(self):
         self.assertEqual(self.run_guard('run').returncode,0)
@@ -85,6 +88,10 @@ esac
     def test_failed_second_restart_does_not_mark_boot_successful(self):
         self.assertNotEqual(self.run_guard('run', FAIL_AT='2').returncode,0)
         self.assertEqual((self.root/'receipt').read_text().strip(), 'previous-boot')
+        journal = (self.root/'journal').read_text()
+        self.assertIn('Saved restart stage: paused', journal)
+        self.assertIn('Method: modules', journal)
+        self.assertIn('KernelSU soft reboot request failed.', journal)
     def test_first_observed_and_second_disabled_never_restarts(self):
         (self.attempt/'first_observed').write_text('1')
         (self.attempt/'second').write_text('0')
@@ -94,6 +101,22 @@ esac
         (self.attempt/'second').write_text('0')
         self.assertEqual(self.run_guard('run').returncode,0)
         self.assertEqual(self.count(),1)
+        self.assertEqual((self.root/'requests').read_text().splitlines(), ['ksud soft-reboot'])
+    def test_previously_requested_module_start_is_not_replayed(self):
+        (self.attempt/'first_observed').write_text('1')
+        (self.attempt/'module-start-requested').mkdir()
+        self.assertNotEqual(self.run_guard('run').returncode,0)
+        self.assertEqual(self.count(),0)
+        self.assertEqual(self.phase(),'paused')
+    def test_missing_daemon_with_single_restart_never_restarts(self):
+        (self.attempt/'second').write_text('0')
+        (self.bin/'ksud').unlink()
+        self.assertNotEqual(self.run_guard('run').returncode,0)
+        self.assertEqual(self.count(),0)
+    def test_invalid_second_setting_never_restarts(self):
+        (self.attempt/'second').write_text('2')
+        self.assertNotEqual(self.run_guard('run').returncode,0)
+        self.assertEqual(self.count(),0)
     def test_first_restart_failure_never_retries(self):
         self.assertNotEqual(self.run_guard('run',FAIL_REQUEST='1').returncode,0)
         self.assertEqual(self.count(),1)

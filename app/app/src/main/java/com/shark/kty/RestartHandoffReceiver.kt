@@ -37,6 +37,7 @@ class RestartHandoffReceiver : BroadcastReceiver() {
             if (!prefs.edit().putBoolean("claimed", true).commit()) return
             val status = File(context.filesDir, "restart-handoff-result.txt")
             try {
+                File(context.filesDir, "restart-controller-status.txt").apply { if (!exists()) createNewFile() }
                 val controller = context.assets.open("restart_guard.sh").bufferedReader().use { it.readText() }
                 val script = """
                     [ "${'$'}(id -u)" = 0 ] || exit 71

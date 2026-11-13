@@ -404,6 +404,7 @@ class MainActivity : ComponentActivity() {
         window.isNavigationBarContrastEnforced = false
         super.onCreate(savedInstanceState)
         BootAutomation.receipt(this).apply { if (!exists()) createNewFile() }
+        File(filesDir, "restart-controller-status.txt").apply { if (!exists()) createNewFile() }
         restoreRootAfterBoot = BootAutomation.enabled(this)
         Shizuku.addRequestPermissionResultListener(permissionListener)
         Shizuku.addBinderReceivedListenerSticky(binderListener)
@@ -2561,7 +2562,8 @@ class MainActivity : ComponentActivity() {
             val (rc, controllerOutput) = restartController("status")
             val (_, handoffOutput) = restartHandoff("status")
             val appOutput = runCatching { File(filesDir, "restart-handoff-result.txt").readText() }.getOrDefault("")
-            val output = listOf(handoffOutput, appOutput, controllerOutput).filter { it.isNotBlank() }.joinToString("\n\n")
+            val savedStage = runCatching { File(filesDir, "restart-controller-status.txt").readText() }.getOrDefault("")
+            val output = listOf(handoffOutput, appOutput, savedStage, controllerOutput).filter { it.isNotBlank() }.joinToString("\n\n")
             addLog("Restart status ($rc): $output")
             withContext(Dispatchers.Main) {
                 android.app.AlertDialog.Builder(this@MainActivity)

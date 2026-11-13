@@ -35,7 +35,6 @@ jobs:
           ./gradlew :app:testDebugUnitTest :app:assembleRelease --no-daemon
       - uses: actions/upload-artifact@v4
         with:
-          name: shark-2.2.9-unsigned-for-local-signing
+          name: shark-2.2.10-unsigned-for-local-signing
           path: app/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
-

@@ -7,6 +7,7 @@ BASE=/data/adb/shark-restart-guard
 BOOT_FILE=/proc/sys/kernel/random/boot_id
 SELF=/data/adb/shark-restart-guard/controller.sh
 RECEIPT=/data/user/0/com.shark.kty/files/automatic-boot-complete
+JOURNAL=/data/user/0/com.shark.kty/files/restart-controller-status.txt
 LIMIT=180
 STABLE=15
 mkdir -p "$BASE" || exit 70
@@ -18,7 +19,13 @@ control="$BASE/control-$boot.lock"
 phase() { cat "$state/phase" 2>/dev/null; }
 put_phase() {
     printf '%s\n' "$1" > "$state/phase.new" &&
-        mv "$state/phase.new" "$state/phase" && sync
+        mv "$state/phase.new" "$state/phase" || return 1
+    # Keep an app-readable last-stage record even if a physical reboot clears root.
+    if [ -f "$JOURNAL" ] && [ ! -L "$JOURNAL" ]; then
+        { printf 'Saved restart stage: %s\nPhysical boot: %s\nMethod: %s\n' "$1" "$boot" "${method:-not_requested}";
+          [ ! -f "$state/reason" ] || cat "$state/reason"; } > "$JOURNAL" || echo 'Could not save the app-readable stage.'
+    fi
+    sync
 }
 pause() {
     printf '%s\n' "$*" > "$state/reason"
@@ -60,12 +67,24 @@ restart_once() {
     old=$(zygote)
     [ -n "$old" ] || pause 'Zygote not running.'
     ready || pause 'Android is not ready or owner is locked.'
+    method="$2"
     put_phase "$1" || exit 74
-    # Use the Manager's operation so enabled modules receive their boot stages.
-    # Restarting Zygote alone does not initialize the module runtime.
-    [ -x /data/adb/ksud ] || pause 'KernelSU daemon unavailable. No restart requested.'
-    /data/adb/ksud soft-reboot || pause 'KernelSU soft reboot request failed.'
+    echo "$(date +%s) boot=$boot phase=$1 method=$2 old_zygote=$old"
+    case "$2" in
+        framework)
+            setprop ctl.restart zygote || pause 'Framework restart request failed.'
+            ;;
+        modules)
+            # Exactly one KernelSU lifecycle pass per sequence. Repeating it also
+            # repeats every enabled module's boot scripts, not just Zygote.
+            mkdir "$state/module-start-requested" 2>/dev/null || pause 'Module startup was already requested; refusing to replay it.'
+            [ -x /data/adb/ksud ] || pause 'KernelSU daemon unavailable. No restart requested.'
+            /data/adb/ksud soft-reboot || pause 'KernelSU soft reboot request failed.'
+            ;;
+        *) pause 'Unknown restart method.';;
+    esac
     wait_ready "$old"
+    echo "$(date +%s) phase=$1 verified_zygote=$(zygote)"
 }
 case "$1" in
     cancel)
@@ -140,6 +159,10 @@ case "$1" in
         mkdir "$state/worker.lock" 2>/dev/null || exit 85
         same_boot || pause 'Attempt belongs to a different physical boot.'
         [ "$(phase)" = queued ] || pause 'Refusing to replay an interrupted stage.'
+        second=$(cat "$state/second")
+        case "$second" in 0|1) ;; *) pause 'Invalid second-restart setting.';; esac
+        # Validate before either restart, so a missing daemon cannot leave a half-sequence.
+        [ -x /data/adb/ksud ] || pause 'KernelSU daemon unavailable. No restart requested.'
         sleep 2
         observed=$(cat "$state/first_observed" 2>/dev/null)
         case "$observed" in
@@ -149,15 +172,18 @@ case "$1" in
                 ready || pause 'Observed first restart is no longer healthy.'
                 echo 'First framework restart was observed before handoff.'
                 ;;
-            ''|0) restart_once first_requested;;
+            ''|0)
+                if [ "$second" = 1 ]; then restart_once first_requested framework
+                else restart_once first_requested modules; fi
+                ;;
             *) pause 'Invalid first-restart observation.';;
         esac
         put_phase first_verified || exit 74
-        if [ "$(cat "$state/second")" = 1 ]; then
+        if [ "$second" = 1 ]; then
             delay=$(cat "$state/delay")
             case "$delay" in 0) seconds=12;; 1|2|3) seconds=$((delay * 60));; *) pause 'Invalid delay.';; esac
             sleep "$seconds"
-            restart_once second_requested
+            restart_once second_requested modules
         fi
         put_phase complete || exit 74
         # MainActivity creates this file with its own UID and SELinux category.
